@@ -640,7 +640,15 @@ export default function App() {
     const [loading, setLoading] = useState(false);
     const [sosAlarm, setSosAlarm] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [currentTime, setCurrentTime] = useState(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     const audioCtxRef = useRef<AudioContext | null>(null);
+
+    useEffect(() => {
+        const timer = setInterval(() => {
+            setCurrentTime(new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+        }, 1000);
+        return () => clearInterval(timer);
+    }, []);
 
     /* ── Play SOS alarm sound ─────────────────────────────────────────────── */
     const playAlarm = useCallback(() => {
@@ -769,9 +777,21 @@ export default function App() {
                         </div>
                     ))}
                 </nav>
-                <div style={{ padding: '16px', borderTop: '1px solid var(--border)' }}>
-                    <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 8 }}>Logged in as Admin</div>
-                    <button className="btn btn-outline" style={{ padding: '8px 16px', fontSize: 13, minHeight: 40 }} onClick={handleLogout}>🚪 Logout</button>
+                <div style={{ padding: '16px', borderTop: '1px solid var(--border)', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <div style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--grad-red)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>
+                            🛡️
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 800, color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                {userInfo?.name || 'Administrator'}
+                            </div>
+                            <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>Authority Dispatcher</div>
+                        </div>
+                    </div>
+                    <button className="btn btn-outline" style={{ padding: '8px 14px', fontSize: 12.5, minHeight: 38, width: '100%', borderColor: 'rgba(255,56,73,0.3)', color: '#ff5e6d' }} onClick={handleLogout}>
+                        🚪 Log Out
+                    </button>
                 </div>
             </aside>
 
@@ -779,14 +799,25 @@ export default function App() {
             <main className="main" style={sosAlarm ? { marginTop: 50 } : {}}>
                 <div className="topbar">
                     <button className="hamburger" onClick={() => setSidebarOpen(o => !o)} aria-label="Open menu">☰</button>
-                    <div className="topbar-title">{titles[page]}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div className="topbar-title">{titles[page]}</div>
+                        {alerts.filter(a => a.status === 'active').length > 0 && (
+                            <span style={{ background: '#ff3849', color: '#fff', fontSize: 11, fontWeight: 900, padding: '3px 10px', borderRadius: 20, boxShadow: '0 0 12px rgba(255,56,73,0.5)', animation: 'pulse 1.5s infinite' }}>
+                                {alerts.filter(a => a.status === 'active').length} ACTIVE SOS
+                            </span>
+                        )}
+                    </div>
                     <div className="topbar-right">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: 20, padding: '5px 12px', fontSize: 12, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono, monospace' }}>
+                            <span>⏱️</span>
+                            <span>{currentTime}</span>
+                        </div>
                         <div className="ws-badge">
                             <div className="ws-dot" style={{ background: wsConnected ? 'var(--green)' : 'var(--red)' }} />
-                            <span>{wsConnected ? 'Live' : '...'}</span>
+                            <span>{wsConnected ? 'Network Live' : 'Connecting…'}</span>
                         </div>
-                        <div className="admin-badge">ADMIN</div>
-                        <button className="btn btn-outline topbar-refresh" style={{ width: 'auto', padding: '8px 12px', fontSize: 12, minHeight: 36 }} onClick={fetchAll}>↻</button>
+                        <div className="admin-badge">COMMAND</div>
+                        <button className="btn btn-outline topbar-refresh" style={{ width: 'auto', padding: '8px 12px', fontSize: 12, minHeight: 36, borderRadius: 10 }} onClick={fetchAll} title="Refresh data">↻</button>
                     </div>
                 </div>
                 <div className="content">

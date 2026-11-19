@@ -1,10 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
     View, Text, TouchableOpacity, StyleSheet, Alert, Animated,
-    StatusBar, ScrollView, Platform, Vibration,
+    StatusBar, ScrollView, Platform, Vibration, Linking,
 } from 'react-native';
 import { useAuth } from '../context/AuthContext';
-import { triggerSOS, callEmergencyService, SOSType } from '../services/sos';
+import { triggerSOS, callEmergencyService, findNearestEmergencyStation, SOSType } from '../services/sos';
 import { startLocationTracking, stopLocationTracking } from '../services/location';
 
 const EMERGENCY_SERVICES = [
@@ -64,7 +64,21 @@ export default function HomeScreen({ navigation }: any) {
         );
     };
 
-    const handleEmergencyCall = (type: SOSType, label: string) => {
+    const handleEmergencyCall = async (type: SOSType, label: string) => {
+        try {
+            const nearest = await findNearestEmergencyStation(type);
+            if (nearest && nearest.name) {
+                Alert.alert(
+                    `Nearest ${label} Station`,
+                    `📍 ${nearest.name}\n📏 ${nearest.formattedDistance || `${(nearest.distance / 1000).toFixed(1)} km`} away\n📞 ${nearest.phone}`,
+                    [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: `Call (${nearest.phone})`, onPress: () => Linking.openURL(`tel:${nearest.phone}`) },
+                    ]
+                );
+                return;
+            }
+        } catch { }
         Alert.alert(`Call ${label}?`, `This will call ${label} directly.`, [
             { text: 'Cancel', style: 'cancel' },
             { text: `Call ${label}`, onPress: () => callEmergencyService(type) },

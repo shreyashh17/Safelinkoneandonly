@@ -18,51 +18,14 @@ export default function LoginFlow({ onLogin }: Props) {
     const [loading, setLoading] = useState(false);
     const [showPw, setShowPw] = useState(false);
 
+    // If an existing citizen user attempts to login on the admin portal
+    const [citizenConflictUser, setCitizenConflictUser] = useState<any | null>(null);
+
     const reset = (next: Step) => {
         setName(''); setEmail(''); setPassword(''); setConfirmPassword('');
         setError(''); setSuccess(''); setLoading(false); setShowPw(false);
+        setCitizenConflictUser(null);
         setStep(next);
-    };
-
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true); setError(''); setSuccess('');
-
-        const isRegister = step === 'admin-register' || step === 'user-register';
-        const isAdmin = step === 'admin-login' || step === 'admin-register';
-
-        // Validation
-        if (isRegister) {
-            if (!name.trim()) { setError('Full name is required.'); setLoading(false); return; }
-            if (password.length < 6) { setError('Password must be at least 6 characters.'); setLoading(false); return; }
-            if (password !== confirmPassword) { setError("Passwords don't match."); setLoading(false); return; }
-            if (isAdmin && !email.endsWith('@admin.safelink')) {
-                setError('Admin accounts must use an email ending with @admin.safelink');
-                setLoading(false); return;
-            }
-        }
-
-        try {
-            const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
-            const body = isRegister ? { name, email, password } : { email, password };
-            const res = await api.post(endpoint, body);
-
-            // For admin paths, enforce admin role
-            if (isAdmin && res.data.role !== 'admin') {
-                setError('This account does not have admin privileges.');
-                setLoading(false); return;
-            }
-
-            if (isRegister) {
-                setSuccess('Account created successfully! Signing you in…');
-                setTimeout(() => finishLogin(res.data), 900);
-            } else {
-                finishLogin(res.data);
-            }
-        } catch (err: any) {
-            setError(err?.response?.data?.error || (isRegister ? 'Registration failed.' : 'Login failed. Check your credentials.'));
-            setLoading(false);
-        }
     };
 
     const finishLogin = (data: any) => {
@@ -72,232 +35,836 @@ export default function LoginFlow({ onLogin }: Props) {
         onLogin(data.token, data.role, { name: data.name, email: data.email });
     };
 
-    /* ─── Landing ──────────────────────────────────────────────────────────── */
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setLoading(true);
+        setError('');
+        setSuccess('');
+        setCitizenConflictUser(null);
+
+        const isRegister = step === 'admin-register' || step === 'user-register';
+        const isAdmin = step === 'admin-login' || step === 'admin-register';
+        const cleanEmail = email.trim().toLowerCase();
+        const cleanName = name.trim();
+
+        if (!cleanEmail) {
+            setError('Please enter your email address.');
+            setLoading(false);
+            return;
+        }
+        if (!password) {
+            setError('Please enter your password.');
+            setLoading(false);
+            return;
+        }
+
+        if (isRegister) {
+            if (!cleanName) {
+                setError('Full name is required.');
+                setLoading(false);
+                return;
+            }
+            if (password.length < 6) {
+                setError('Password must be at least 6 characters.');
+                setLoading(false);
+                return;
+            }
+            if (password !== confirmPassword) {
+                setError("Passwords do not match. Please verify.");
+                setLoading(false);
+                return;
+            }
+        }
+
+        try {
+            const endpoint = isRegister ? '/api/auth/register' : '/api/auth/login';
+            const body: any = isRegister
+                ? { name: cleanName, email: cleanEmail, password, role: isAdmin ? 'admin' : 'user' }
+                : { email: cleanEmail, password };
+
+            const res = await api.post(endpoint, body);
+
+            // If logging into admin portal but the user is registered as a citizen
+            if (isAdmin && res.data.role !== 'admin') {
+                setCitizenConflictUser({
+                    email: res.data.email,
+                    name: res.data.name,
+                    token: res.data.token,
+                    role: res.data.role,
+                });
+                setLoading(false);
+                return;
+            }
+
+            if (isRegister) {
+                const msg = res.data.message || (isAdmin ? 'Admin account created! Launching Command Center…' : 'Citizen account created! Entering Portal…');
+                setSuccess(msg);
+                setTimeout(() => finishLogin(res.data), 700);
+            } else {
+                setSuccess('Authentication verified! Redirecting…');
+                setTimeout(() => finishLogin(res.data), 350);
+            }
+        } catch (err: any) {
+            const msg = err?.response?.data?.error || (isRegister ? 'Registration failed. Please check your information.' : 'Invalid email or password.');
+            setError(msg);
+            setLoading(false);
+        }
+    };
+
+    const handleUpgradeToAdmin = async () => {
+        if (!citizenConflictUser) return;
+        setLoading(true);
+        setError('');
+        try {
+            const res = await api.post('/api/auth/upgrade', {
+                email: citizenConflictUser.email,
+                password,
+            });
+            setSuccess('Account elevated to Admin! Launching Dashboard…');
+            setCitizenConflictUser(null);
+            setTimeout(() => finishLogin(res.data), 700);
+        } catch (err: any) {
+            setError(err?.response?.data?.error || 'Failed to elevate account.');
+            setLoading(false);
+        }
+    };
+
+    const handleContinueAsCitizen = () => {
+        if (citizenConflictUser) {
+            finishLogin(citizenConflictUser);
+        }
+    };
+
+    /* ─── 1. Landing View (Portal Selection) ─────────────────────────────────── */
     if (step === 'landing') {
         return (
-            <div style={s.page}>
-                <div style={s.landingWrap}>
-                    {/* Logo */}
-                    <div style={s.logo}>
-                        <img src="/logo2.png" alt="SafeLink" style={{ width: 100, height: 100, objectFit: 'contain' }} />
-                        <h1 style={s.logoTitle}>SafeLink</h1>
-                        <p style={s.logoSub}>Real-Time Emergency Response System</p>
+            <div style={styles.landingPage}>
+                {/* Background ambient lighting */}
+                <div style={styles.ambientGlowRed} />
+                <div style={styles.ambientGlowBlue} />
+
+                <div style={styles.landingContent}>
+                    {/* Status Pill */}
+                    <div style={styles.liveBadgeWrap}>
+                        <span style={styles.liveDot} />
+                        <span style={styles.liveBadgeText}>Emergency Response Network · 100% Operational</span>
                     </div>
 
-                    <p style={s.prompt}>Choose your portal to continue</p>
-
-                    {/* Portal cards */}
-                    <div style={s.portalRow}>
-                        {/* Admin card */}
-                        <button style={s.portalCard} onClick={() => reset('admin-login')}>
-                            <img src="/logo2.png" alt="Admin Logo" style={{ width: 44, height: 44, marginBottom: 12, objectFit: 'contain' }} />
-                            <div style={s.portalCardTitle}>Admin / Authority</div>
-                            <div style={s.portalCardSub}>
-                                Dashboard for police, fire &amp; emergency authorities. View live alerts, manage incidents, monitor crowd density.
-                            </div>
-                            <div style={{ ...s.portalBtn, background: '#FF3B3B' }}>Enter Admin Portal →</div>
-                        </button>
-
-                        {/* User card */}
-                        <button style={s.portalCard} onClick={() => reset('user-login')}>
-                            <div style={{ fontSize: 48, marginBottom: 12 }}>🆘</div>
-                            <div style={s.portalCardTitle}>User / Citizen</div>
-                            <div style={s.portalCardSub}>
-                                One-click SOS, emergency dial, quick alerts and GPS sharing for citizens during disasters and emergencies.
-                            </div>
-                            <div style={{ ...s.portalBtn, background: '#3B82F6' }}>Enter Emergency Portal →</div>
-                        </button>
+                    {/* Logo & Headline */}
+                    <div style={styles.heroSection}>
+                        <div style={styles.logoBadge}>
+                            <img src="/logo2.png" alt="SafeLink Logo" style={styles.logoImg} />
+                        </div>
+                        <h1 style={styles.heroTitle}>SafeLink</h1>
+                        <p style={styles.heroSubtitle}>
+                            Next-Generation Real-Time Emergency Help &amp; Disaster Response Platform
+                        </p>
                     </div>
 
-                    <p style={s.footNote}>SafeLink v1.0 · Encrypted · Real-Time · Always-On</p>
+                    {/* Two Portal Cards */}
+                    <div style={styles.portalGrid}>
+                        {/* 1. Admin Command Center Card */}
+                        <div style={styles.portalCardAdmin}>
+                            <div style={styles.cardTopRow}>
+                                <div style={styles.cardIconBoxRed}>🛡️</div>
+                                <span style={styles.cardTagRed}>AUTHORITY DISPATCH</span>
+                            </div>
+                            <h2 style={styles.cardHeading}>Admin Command Center</h2>
+                            <p style={styles.cardText}>
+                                Central command for Police, Fire, Ambulance dispatch &amp; Disaster Management Authorities.
+                            </p>
+                            
+                            <div style={styles.featureList}>
+                                <div style={styles.featureItem}>
+                                    <span style={styles.checkIconRed}>✓</span> Live SOS alerts stream with sound alert
+                                </div>
+                                <div style={styles.featureItem}>
+                                    <span style={styles.checkIconRed}>✓</span> Real-time citizen GPS mapping &amp; density
+                                </div>
+                                <div style={styles.featureItem}>
+                                    <span style={styles.checkIconRed}>✓</span> Instant government warning broadcasts
+                                </div>
+                            </div>
+
+                            <div style={styles.cardBtnRow}>
+                                <button style={styles.btnPrimaryRed} onClick={() => reset('admin-login')}>
+                                    Sign In as Admin →
+                                </button>
+                                <button style={styles.btnSecondaryRed} onClick={() => reset('admin-register')}>
+                                    ➕ Create Admin Account
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* 2. Citizen Emergency Portal Card */}
+                        <div style={styles.portalCardUser}>
+                            <div style={styles.cardTopRow}>
+                                <div style={styles.cardIconBoxBlue}>🆘</div>
+                                <span style={styles.cardTagBlue}>CITIZEN LIFELINE</span>
+                            </div>
+                            <h2 style={styles.cardHeading}>Citizen Emergency Portal</h2>
+                            <p style={styles.cardText}>
+                                Instant protection for individuals, families &amp; public safety during crises and emergencies.
+                            </p>
+
+                            <div style={styles.featureList}>
+                                <div style={styles.featureItem}>
+                                    <span style={styles.checkIconBlue}>✓</span> 1-tap SOS trigger with live GPS sharing
+                                </div>
+                                <div style={styles.featureItem}>
+                                    <span style={styles.checkIconBlue}>✓</span> Real-time nearest Police, Hospital, Fire
+                                </div>
+                                <div style={styles.featureItem}>
+                                    <span style={styles.checkIconBlue}>✓</span> AI voice distress &amp; quick disaster alerts
+                                </div>
+                            </div>
+
+                            <div style={styles.cardBtnRow}>
+                                <button style={styles.btnPrimaryBlue} onClick={() => reset('user-login')}>
+                                    Sign In as Citizen →
+                                </button>
+                                <button style={styles.btnSecondaryBlue} onClick={() => reset('user-register')}>
+                                    ➕ Register as Citizen
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div style={styles.footerNote}>
+                        🔒 256-Bit Encrypted · Real-Time WebSockets · OpenStreetMap Verified Navigation
+                    </div>
                 </div>
             </div>
         );
     }
 
-    /* ─── Forms ────────────────────────────────────────────────────────────── */
+    /* ─── 2. Auth Form View (Admin or Citizen) ───────────────────────────────── */
     const isAdmin = step === 'admin-login' || step === 'admin-register';
     const isRegister = step === 'admin-register' || step === 'user-register';
-    const accent = isAdmin ? '#FF3B3B' : '#3B82F6';
-    const portalName = isAdmin ? 'Admin Portal' : 'Emergency Portal';
-    const portalIcon = isAdmin ? '🛡️' : '🆘';
+    const accentColor = isAdmin ? '#ff3849' : '#3b82f6';
+    const accentGrad = isAdmin
+        ? 'linear-gradient(135deg, #ff4458 0%, #d8142b 100%)'
+        : 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)';
+    const portalTitle = isAdmin ? 'Admin Command Center' : 'Citizen Emergency Portal';
+    const portalSub = isAdmin ? 'Sign in to access authority dispatch tools' : 'Sign in to access your personal emergency lifeline';
 
     return (
-        <div style={s.page}>
-            <div style={s.formWrap}>
-
-                {/* Back */}
-                <button style={s.backBtn} onClick={() => reset(isAdmin ? 'landing' : 'landing')}>
-                    ← Back
+        <div style={styles.formPage}>
+            <div style={styles.formCard}>
+                {/* Back button */}
+                <button style={styles.backButton} onClick={() => reset('landing')}>
+                    ← Back to Portals
                 </button>
 
-                {/* Header */}
-                <div style={s.formHeader}>
-                    <div style={{ fontSize: 48, marginBottom: 8 }}>{portalIcon}</div>
-                    <h2 style={{ ...s.formTitle, color: accent }}>{portalName}</h2>
-                    <p style={s.formSub}>SafeLink Emergency Response</p>
+                {/* Form Header */}
+                <div style={styles.formHeader}>
+                    <div style={{ ...styles.portalBadgeIcon, background: `${accentColor}18`, borderColor: `${accentColor}33`, color: accentColor }}>
+                        {isAdmin ? '🛡️' : '🆘'}
+                    </div>
+                    <h2 style={styles.formTitle}>{portalTitle}</h2>
+                    <p style={styles.formSubtitle}>{portalSub}</p>
                 </div>
 
-                {/* Login / Register tabs */}
-                <div style={s.tabs}>
+                {/* Tabs */}
+                <div style={styles.tabsWrap}>
                     <button
-                        style={{ ...s.tab, ...(isRegister ? {} : { borderBottom: `2px solid ${accent}`, color: accent }) }}
+                        type="button"
+                        style={{
+                            ...styles.tabBtn,
+                            ...(isRegister ? {} : { background: accentGrad, color: '#fff', boxShadow: `0 4px 14px ${accentColor}44` }),
+                        }}
                         onClick={() => reset(isAdmin ? 'admin-login' : 'user-login')}>
-                        Login
+                        🔑 Sign In
                     </button>
                     <button
-                        style={{ ...s.tab, ...(isRegister ? { borderBottom: `2px solid ${accent}`, color: accent } : {}) }}
+                        type="button"
+                        style={{
+                            ...styles.tabBtn,
+                            ...(isRegister ? { background: accentGrad, color: '#fff', boxShadow: `0 4px 14px ${accentColor}44` } : {}),
+                        }}
                         onClick={() => reset(isAdmin ? 'admin-register' : 'user-register')}>
-                        {isAdmin ? 'Create Admin' : 'Register'}
+                        ➕ {isAdmin ? 'Create Admin' : 'Register'}
                     </button>
                 </div>
 
-                {/* Special notice for admin register */}
-                {step === 'admin-register' && (
-                    <div style={{ ...s.infoBox, borderColor: '#FF3B3B44', background: '#FF3B3B11', color: '#FF3B3B' }}>
-                        ℹ️ Admin accounts require an email ending in <strong>@admin.safelink</strong><br />
-                        e.g. <code style={s.code}>yourname@admin.safelink</code>
+                {/* Conflict Notice (Citizen attempting admin login) */}
+                {citizenConflictUser && (
+                    <div style={styles.conflictCard}>
+                        <div style={styles.conflictHeader}>
+                            <span>⚠️ Citizen Account Detected</span>
+                        </div>
+                        <p style={styles.conflictText}>
+                            <strong>{citizenConflictUser.email}</strong> is registered as a Citizen. You can elevate it to Admin or proceed to the Citizen Portal.
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <button
+                                type="button"
+                                style={{ ...styles.btnPrimary, background: 'var(--grad-red)' }}
+                                onClick={handleUpgradeToAdmin}
+                                disabled={loading}>
+                                🚀 Upgrade to Admin &amp; Enter Dashboard
+                            </button>
+                            <button
+                                type="button"
+                                style={styles.btnSecondary}
+                                onClick={handleContinueAsCitizen}>
+                                🚪 Proceed to Citizen Emergency Portal
+                            </button>
+                        </div>
                     </div>
                 )}
 
                 {/* Form */}
-                <form onSubmit={handleSubmit} style={s.form} noValidate>
+                <form onSubmit={handleSubmit} style={styles.formElement} noValidate>
                     {isRegister && (
-                        <div style={s.fg}>
-                            <label style={s.label}>Full Name</label>
-                            <input style={s.input} type="text" placeholder="Enter your full name"
-                                value={name} onChange={e => setName(e.target.value)} required />
+                        <div style={styles.fieldGroup}>
+                            <label style={styles.fieldLabel}>Full Name</label>
+                            <input
+                                style={styles.fieldInput}
+                                type="text"
+                                placeholder={isAdmin ? "Officer / Administrator Name" : "Your Full Name"}
+                                value={name}
+                                onChange={e => setName(e.target.value)}
+                                autoFocus={isRegister}
+                                required
+                            />
                         </div>
                     )}
 
-                    <div style={s.fg}>
-                        <label style={s.label}>Email Address</label>
-                        <input style={s.input} type="email"
-                            placeholder={isAdmin ? 'name@admin.safelink' : 'your@email.com'}
-                            value={email} onChange={e => setEmail(e.target.value)} required />
+                    <div style={styles.fieldGroup}>
+                        <label style={styles.fieldLabel}>Email Address</label>
+                        <input
+                            style={styles.fieldInput}
+                            type="email"
+                            placeholder={isAdmin ? "admin@safelink.com or any email" : "yourname@example.com"}
+                            value={email}
+                            onChange={e => setEmail(e.target.value)}
+                            autoFocus={!isRegister}
+                            required
+                        />
                     </div>
 
-                    <div style={s.fg}>
-                        <label style={s.label}>Password</label>
+                    <div style={styles.fieldGroup}>
+                        <label style={styles.fieldLabel}>Password</label>
                         <div style={{ position: 'relative' }}>
-                            <input style={{ ...s.input, paddingRight: 44 }}
+                            <input
+                                style={{ ...styles.fieldInput, paddingRight: 48 }}
                                 type={showPw ? 'text' : 'password'}
-                                placeholder={isRegister ? 'Min. 6 characters' : 'Enter your password'}
-                                value={password} onChange={e => setPassword(e.target.value)} required />
-                            <button type="button"
-                                style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', cursor: 'pointer', color: '#888', fontSize: 16 }}
-                                onClick={() => setShowPw(!showPw)}>{showPw ? '🙈' : '👁️'}</button>
+                                placeholder={isRegister ? "Minimum 6 characters" : "Enter your password"}
+                                value={password}
+                                onChange={e => setPassword(e.target.value)}
+                                required
+                            />
+                            <button
+                                type="button"
+                                style={styles.passwordEyeBtn}
+                                onClick={() => setShowPw(!showPw)}
+                                title={showPw ? "Hide password" : "Show password"}>
+                                {showPw ? '🙈' : '👁️'}
+                            </button>
                         </div>
                     </div>
 
                     {isRegister && (
-                        <div style={s.fg}>
-                            <label style={s.label}>Confirm Password</label>
-                            <input style={s.input} type={showPw ? 'text' : 'password'} placeholder="Re-enter your password"
-                                value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} required />
+                        <div style={styles.fieldGroup}>
+                            <label style={styles.fieldLabel}>Confirm Password</label>
+                            <input
+                                style={styles.fieldInput}
+                                type={showPw ? 'text' : 'password'}
+                                placeholder="Re-type your password"
+                                value={confirmPassword}
+                                onChange={e => setConfirmPassword(e.target.value)}
+                                required
+                            />
                         </div>
                     )}
 
-                    {/* Error */}
+                    {/* Messages */}
                     {error && (
-                        <div style={{ ...s.msgBox, background: '#FF3B3B11', borderColor: '#FF3B3B44', color: '#FF3B3B' }}>
-                            ❌ {error}
-                        </div>
-                    )}
-                    {/* Success */}
-                    {success && (
-                        <div style={{ ...s.msgBox, background: '#10B98111', borderColor: '#10B98144', color: '#10B981' }}>
-                            ✅ {success}
+                        <div style={styles.errorAlert}>
+                            <span>❌</span>
+                            <span>{error}</span>
                         </div>
                     )}
 
-                    <button type="submit" disabled={loading}
-                        style={{ ...s.submitBtn, background: accent, opacity: loading ? 0.7 : 1 }}>
-                        {loading
-                            ? (isRegister ? 'Creating account…' : 'Signing in…')
-                            : (isRegister ? 'Create Account' : 'Sign In')}
+                    {success && (
+                        <div style={styles.successAlert}>
+                            <span>✅</span>
+                            <span>{success}</span>
+                        </div>
+                    )}
+
+                    {/* Submit Button */}
+                    <button
+                        type="submit"
+                        disabled={loading}
+                        style={{ ...styles.btnPrimary, background: accentGrad, opacity: loading ? 0.7 : 1 }}>
+                        {loading ? '⏳ Verifying credentials…' : isRegister
+                            ? (isAdmin ? '🛡️ Create Admin Account & Sign In' : '➕ Create Account & Sign In')
+                            : (isAdmin ? '🛡️ Sign In to Command Center' : '🆘 Enter Emergency Portal')}
                     </button>
                 </form>
 
-                {/* Divider with alternate action */}
-                <div style={s.divider}>
-                    <span style={s.dividerLine} />
-                    <span style={s.dividerText}>{isRegister ? 'Already have an account?' : 'New here?'}</span>
-                    <span style={s.dividerLine} />
+                {/* Alternate link */}
+                <div style={styles.altSwitchRow}>
+                    <button
+                        type="button"
+                        style={styles.altSwitchBtn}
+                        onClick={() => reset(isRegister
+                            ? (isAdmin ? 'admin-login' : 'user-login')
+                            : (isAdmin ? 'admin-register' : 'user-register'))}>
+                        {isRegister ? 'Already registered? Sign in instead →' : (isAdmin ? 'Need a new admin account? Create here →' : 'New citizen? Register here →')}
+                    </button>
                 </div>
-                <button style={{ ...s.altBtn, borderColor: accent, color: accent }}
-                    onClick={() => reset(isRegister
-                        ? (isAdmin ? 'admin-login' : 'user-login')
-                        : (isAdmin ? 'admin-register' : 'user-register'))}>
-                    {isRegister ? 'Sign In Instead' : (isAdmin ? 'Create Admin Account' : 'Create New Account')}
-                </button>
-
             </div>
         </div>
     );
 }
 
 /* ─── Styles ────────────────────────────────────────────────────────────────── */
-const s: Record<string, React.CSSProperties> = {
-    page: {
-        minHeight: '100vh', background: 'linear-gradient(135deg, #0A0E1A 0%, #0D1324 50%, #0A0E1A 100%)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontFamily: 'Inter, system-ui, sans-serif', padding: '24px 16px',
+const styles: Record<string, React.CSSProperties> = {
+    landingPage: {
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '36px 20px',
+        position: 'relative',
+        overflow: 'hidden',
+    },
+    ambientGlowRed: {
+        position: 'absolute',
+        top: '10%',
+        left: '20%',
+        width: 480,
+        height: 480,
+        borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(255, 56, 73, 0.12) 0%, transparent 70%)',
+        filter: 'blur(50px)',
+        pointerEvents: 'none',
+    },
+    ambientGlowBlue: {
+        position: 'absolute',
+        bottom: '10%',
+        right: '20%',
+        width: 480,
+        height: 480,
+        borderRadius: '50%',
+        background: 'radial-gradient(circle, rgba(59, 130, 246, 0.12) 0%, transparent 70%)',
+        filter: 'blur(50px)',
+        pointerEvents: 'none',
+    },
+    landingContent: {
+        width: '100%',
+        maxWidth: 960,
+        zIndex: 10,
+        textAlign: 'center',
+    },
+    liveBadgeWrap: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        background: 'rgba(16, 185, 129, 0.1)',
+        border: '1px solid rgba(16, 185, 129, 0.3)',
+        borderRadius: 30,
+        padding: '6px 16px',
+        marginBottom: 20,
+    },
+    liveDot: {
+        width: 8,
+        height: 8,
+        borderRadius: '50%',
+        background: '#10b981',
+        boxShadow: '0 0 10px #10b981',
+    },
+    liveBadgeText: {
+        color: '#34d399',
+        fontSize: 12.5,
+        fontWeight: 700,
+        letterSpacing: 0.3,
+    },
+    heroSection: {
+        marginBottom: 36,
+    },
+    logoBadge: {
+        width: 80,
+        height: 80,
+        borderRadius: 24,
+        background: 'linear-gradient(135deg, rgba(255, 56, 73, 0.2) 0%, rgba(14, 19, 34, 0.8) 100%)',
+        border: '1px solid rgba(255, 255, 255, 0.12)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 16,
+        boxShadow: '0 12px 30px rgba(0, 0, 0, 0.4)',
+    },
+    logoImg: {
+        width: 52,
+        height: 52,
+        objectFit: 'contain',
+    },
+    heroTitle: {
+        fontSize: 48,
+        fontWeight: 900,
+        letterSpacing: -1,
+        color: '#fff',
+        margin: '0 0 8px',
+        background: 'linear-gradient(180deg, #ffffff 40%, #cbd5e1 100%)',
+        WebkitBackgroundClip: 'text',
+        WebkitTextFillColor: 'transparent',
+    },
+    heroSubtitle: {
+        fontSize: 16,
+        color: 'var(--text-muted)',
+        maxWidth: 620,
+        margin: '0 auto',
+        lineHeight: 1.6,
     },
 
-    /* Landing */
-    landingWrap: { width: '100%', maxWidth: 860, textAlign: 'center' },
-    logo: { marginBottom: 32 },
-    logoTitle: { fontSize: 48, fontWeight: 900, color: '#FF3B3B', letterSpacing: 4, margin: '12px 0 6px' },
-    logoSub: { color: '#888', fontSize: 16 },
-    prompt: { color: '#666', fontSize: 15, marginBottom: 28 },
-    portalRow: { display: 'flex', gap: 20, justifyContent: 'center', flexWrap: 'wrap' },
-    portalCard: {
-        background: '#151928', border: '1px solid #252c43', borderRadius: 20,
-        padding: '32px 28px', width: 340, textAlign: 'left', cursor: 'pointer',
-        display: 'flex', flexDirection: 'column', gap: 0,
-        transition: 'transform .2s, box-shadow .2s',
+    portalGrid: {
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+        gap: 24,
+        marginBottom: 36,
+        textAlign: 'left',
     },
-    portalCardTitle: { fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 },
-    portalCardSub: { fontSize: 14, color: '#888', lineHeight: 1.6, marginBottom: 24, flexGrow: 1 },
-    portalBtn: { color: '#fff', borderRadius: 10, padding: '12px 20px', fontWeight: 700, fontSize: 15, border: 'none', cursor: 'pointer', textAlign: 'center' },
-    footNote: { color: '#333', fontSize: 12, marginTop: 40 },
+    portalCardAdmin: {
+        background: 'linear-gradient(180deg, rgba(26, 18, 28, 0.7) 0%, rgba(14, 19, 34, 0.95) 100%)',
+        border: '1px solid rgba(255, 56, 73, 0.3)',
+        borderRadius: 24,
+        padding: '32px 28px',
+        boxShadow: '0 20px 45px rgba(0, 0, 0, 0.5), 0 0 30px rgba(255, 56, 73, 0.1)',
+        display: 'flex',
+        flexDirection: 'column',
+        transition: 'transform 0.25s ease, border-color 0.25s ease',
+    },
+    portalCardUser: {
+        background: 'linear-gradient(180deg, rgba(16, 24, 44, 0.7) 0%, rgba(14, 19, 34, 0.95) 100%)',
+        border: '1px solid rgba(59, 130, 246, 0.3)',
+        borderRadius: 24,
+        padding: '32px 28px',
+        boxShadow: '0 20px 45px rgba(0, 0, 0, 0.5), 0 0 30px rgba(59, 130, 246, 0.1)',
+        display: 'flex',
+        flexDirection: 'column',
+        transition: 'transform 0.25s ease, border-color 0.25s ease',
+    },
+    cardTopRow: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 16,
+    },
+    cardIconBoxRed: {
+        fontSize: 32,
+    },
+    cardIconBoxBlue: {
+        fontSize: 32,
+    },
+    cardTagRed: {
+        background: 'rgba(255, 56, 73, 0.15)',
+        border: '1px solid rgba(255, 56, 73, 0.35)',
+        color: '#ff5e6d',
+        padding: '4px 12px',
+        borderRadius: 20,
+        fontSize: 11,
+        fontWeight: 800,
+        letterSpacing: 0.8,
+    },
+    cardTagBlue: {
+        background: 'rgba(59, 130, 246, 0.15)',
+        border: '1px solid rgba(59, 130, 246, 0.35)',
+        color: '#60a5fa',
+        padding: '4px 12px',
+        borderRadius: 20,
+        fontSize: 11,
+        fontWeight: 800,
+        letterSpacing: 0.8,
+    },
+    cardHeading: {
+        fontSize: 22,
+        fontWeight: 800,
+        color: '#fff',
+        margin: '0 0 8px',
+    },
+    cardText: {
+        fontSize: 13.5,
+        color: 'var(--text-muted)',
+        lineHeight: 1.6,
+        marginBottom: 20,
+    },
+    featureList: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+        marginBottom: 28,
+        flex: 1,
+    },
+    featureItem: {
+        fontSize: 13,
+        color: '#cbd5e1',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+    },
+    checkIconRed: {
+        color: '#ff4458',
+        fontWeight: 900,
+        fontSize: 14,
+    },
+    checkIconBlue: {
+        color: '#3b82f6',
+        fontWeight: 900,
+        fontSize: 14,
+    },
+    cardBtnRow: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+    },
+    btnPrimaryRed: {
+        background: 'var(--grad-red)',
+        color: '#fff',
+        border: 'none',
+        borderRadius: 14,
+        padding: '14px',
+        fontSize: 14.5,
+        fontWeight: 800,
+        cursor: 'pointer',
+        boxShadow: '0 6px 20px rgba(255, 56, 73, 0.3)',
+        transition: 'transform 0.2s',
+        textAlign: 'center',
+    },
+    btnSecondaryRed: {
+        background: 'rgba(255, 56, 73, 0.08)',
+        border: '1px solid rgba(255, 56, 73, 0.3)',
+        color: '#ff5e6d',
+        borderRadius: 14,
+        padding: '12px',
+        fontSize: 13.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        textAlign: 'center',
+    },
+    btnPrimaryBlue: {
+        background: 'var(--grad-blue)',
+        color: '#fff',
+        border: 'none',
+        borderRadius: 14,
+        padding: '14px',
+        fontSize: 14.5,
+        fontWeight: 800,
+        cursor: 'pointer',
+        boxShadow: '0 6px 20px rgba(59, 130, 246, 0.3)',
+        transition: 'transform 0.2s',
+        textAlign: 'center',
+    },
+    btnSecondaryBlue: {
+        background: 'rgba(59, 130, 246, 0.08)',
+        border: '1px solid rgba(59, 130, 246, 0.3)',
+        color: '#60a5fa',
+        borderRadius: 14,
+        padding: '12px',
+        fontSize: 13.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+        textAlign: 'center',
+    },
+    footerNote: {
+        color: 'var(--text-dim)',
+        fontSize: 12.5,
+        fontWeight: 600,
+    },
 
-    /* Form card */
-    formWrap: {
-        background: '#151928', borderRadius: 24, border: '1px solid #252c43',
-        padding: '40px 36px', width: '100%', maxWidth: 440,
-        boxShadow: '0 32px 80px rgba(0,0,0,0.5)', position: 'relative',
+    /* Form Card Styles */
+    formPage: {
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '24px 16px',
     },
-    backBtn: {
-        background: 'none', border: 'none', color: '#888', cursor: 'pointer',
-        fontSize: 14, fontWeight: 600, padding: '0 0 16px', display: 'block',
+    formCard: {
+        background: 'var(--grad-surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 28,
+        padding: '36px 32px',
+        width: '100%',
+        maxWidth: 460,
+        boxShadow: 'var(--shadow-lg)',
+        position: 'relative',
     },
-    formHeader: { textAlign: 'center', marginBottom: 24 },
-    formTitle: { fontSize: 26, fontWeight: 900, margin: '0 0 4px', letterSpacing: 1 },
-    formSub: { color: '#888', fontSize: 13 },
-    tabs: { display: 'flex', borderBottom: '1px solid #252c43', marginBottom: 24 },
-    tab: { flex: 1, padding: '10px 0', background: 'none', border: 'none', borderBottom: '2px solid transparent', color: '#888', fontWeight: 700, fontSize: 14, cursor: 'pointer', transition: 'all .2s' },
-    infoBox: { borderRadius: 10, border: '1px solid', padding: '12px 14px', fontSize: 13, lineHeight: 1.6, marginBottom: 20 },
-    code: { background: '#0A0E1A', padding: '2px 6px', borderRadius: 4, fontFamily: 'monospace', fontSize: 12 },
-    form: { display: 'flex', flexDirection: 'column', gap: 16 },
-    fg: { display: 'flex', flexDirection: 'column', gap: 6 },
-    label: { fontSize: 13, fontWeight: 600, color: '#aaa' },
-    input: {
-        background: '#1E2438', border: '1px solid #2A3050', borderRadius: 10,
-        padding: '13px 14px', color: '#fff', fontSize: 15, outline: 'none',
-        width: '100%', boxSizing: 'border-box', transition: 'border-color .2s',
+    backButton: {
+        background: 'none',
+        border: 'none',
+        color: 'var(--text-muted)',
+        fontSize: 13,
+        fontWeight: 700,
+        cursor: 'pointer',
+        marginBottom: 16,
+        padding: 0,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
     },
-    msgBox: { borderRadius: 10, border: '1px solid', padding: '10px 14px', fontSize: 14, lineHeight: 1.5 },
-    submitBtn: {
-        border: 'none', borderRadius: 12, padding: '14px', fontWeight: 800, fontSize: 16,
-        color: '#fff', cursor: 'pointer', width: '100%', marginTop: 4, transition: 'opacity .2s',
+    formHeader: {
+        textAlign: 'center',
+        marginBottom: 24,
     },
-    divider: { display: 'flex', alignItems: 'center', gap: 12, margin: '24px 0 16px' },
-    dividerLine: { flex: 1, height: 1, background: '#252c43' },
-    dividerText: { color: '#555', fontSize: 13, whiteSpace: 'nowrap' },
-    altBtn: {
-        width: '100%', background: 'transparent', borderRadius: 10, padding: '12px',
-        fontWeight: 700, fontSize: 14, cursor: 'pointer', border: '1px solid', transition: 'opacity .2s',
+    portalBadgeIcon: {
+        width: 56,
+        height: 56,
+        borderRadius: 18,
+        border: '1px solid',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 26,
+        marginBottom: 12,
+    },
+    formTitle: {
+        fontSize: 24,
+        fontWeight: 900,
+        color: '#fff',
+        margin: '0 0 6px',
+        letterSpacing: -0.3,
+    },
+    formSubtitle: {
+        fontSize: 13.5,
+        color: 'var(--text-muted)',
+        margin: 0,
+    },
+    tabsWrap: {
+        display: 'flex',
+        gap: 8,
+        background: 'var(--surface2)',
+        padding: 5,
+        borderRadius: 16,
+        marginBottom: 24,
+        border: '1px solid var(--border)',
+    },
+    tabBtn: {
+        flex: 1,
+        background: 'transparent',
+        border: 'none',
+        borderRadius: 12,
+        padding: '10px 0',
+        fontSize: 13.5,
+        fontWeight: 700,
+        color: 'var(--text-muted)',
+        cursor: 'pointer',
+        transition: 'all 0.2s ease',
+    },
+    conflictCard: {
+        background: 'rgba(245, 158, 11, 0.1)',
+        border: '1px solid rgba(245, 158, 11, 0.3)',
+        borderRadius: 16,
+        padding: '16px',
+        marginBottom: 20,
+    },
+    conflictHeader: {
+        color: '#f59e0b',
+        fontWeight: 800,
+        fontSize: 14,
+        marginBottom: 6,
+    },
+    conflictText: {
+        color: '#e2e8f0',
+        fontSize: 13,
+        lineHeight: 1.5,
+        marginBottom: 14,
+    },
+    formElement: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+    },
+    fieldGroup: {
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+    },
+    fieldLabel: {
+        fontSize: 13,
+        fontWeight: 700,
+        color: '#cbd5e1',
+    },
+    fieldInput: {
+        background: 'var(--surface2)',
+        border: '1px solid var(--border)',
+        borderRadius: 12,
+        padding: '13px 16px',
+        color: '#fff',
+        fontSize: 14.5,
+        outline: 'none',
+        width: '100%',
+        transition: 'border-color 0.2s',
+    },
+    passwordEyeBtn: {
+        position: 'absolute',
+        right: 14,
+        top: '50%',
+        transform: 'translateY(-50%)',
+        background: 'none',
+        border: 'none',
+        color: 'var(--text-muted)',
+        fontSize: 18,
+        cursor: 'pointer',
+    },
+    errorAlert: {
+        background: 'rgba(255, 56, 73, 0.12)',
+        border: '1px solid rgba(255, 56, 73, 0.35)',
+        color: '#ff6b78',
+        borderRadius: 12,
+        padding: '12px 14px',
+        fontSize: 13.5,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+    },
+    successAlert: {
+        background: 'rgba(16, 185, 129, 0.12)',
+        border: '1px solid rgba(16, 185, 129, 0.35)',
+        color: '#34d399',
+        borderRadius: 12,
+        padding: '12px 14px',
+        fontSize: 13.5,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+    },
+    btnPrimary: {
+        color: '#fff',
+        border: 'none',
+        borderRadius: 14,
+        padding: '14px',
+        fontSize: 15,
+        fontWeight: 800,
+        cursor: 'pointer',
+        boxShadow: 'var(--shadow-sm)',
+        transition: 'transform 0.2s',
+        marginTop: 4,
+    },
+    btnSecondary: {
+        background: 'transparent',
+        border: '1px solid var(--border)',
+        color: 'var(--text-muted)',
+        borderRadius: 14,
+        padding: '12px',
+        fontSize: 13.5,
+        fontWeight: 700,
+        cursor: 'pointer',
+    },
+    altSwitchRow: {
+        marginTop: 20,
+        textAlign: 'center',
+    },
+    altSwitchBtn: {
+        background: 'none',
+        border: 'none',
+        color: 'var(--text-muted)',
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: 'pointer',
+        textDecoration: 'underline',
     },
 };

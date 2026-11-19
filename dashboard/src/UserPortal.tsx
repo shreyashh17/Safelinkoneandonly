@@ -107,104 +107,89 @@ function NearestStationModal({
     onClose: () => void;
     onCallLogged: () => void;
 }) {
-    const [station, setStation] = useState<NearestStation | null>(null);
+    const [station, setStation] = useState<any | null>(null);
+    const [allStations, setAllStations] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [callInitiated, setCallInitiated] = useState(false);
+    const [selectedIdx, setSelectedIdx] = useState(0);
 
     useEffect(() => {
         let cancelled = false;
         async function fetchNearest() {
-            if (!location) {
-                setStation({
-                    name: `National ${service.label} Helpline`,
-                    phone: service.fallbackNumber,
-                    distance: 0,
-                    lat: 0,
-                    lng: 0,
-                    fallback: true,
-                });
-                setLoading(false);
-                return;
-            }
-
-            const { lat, lng } = location;
-            const radius = 8000; // 8 km search radius
-
-            // Build Overpass QL query for the specific amenity type
-            const query = `[out:json][timeout:10];
-(
-  node[${service.overpassType}](around:${radius},${lat},${lng});
-  way[${service.overpassType}](around:${radius},${lat},${lng});
-  relation[${service.overpassType}](around:${radius},${lat},${lng});
-);
-out center;`;
+            setLoading(true);
+            const serviceKeyMap: Record<string, string> = {
+                'Police': 'police',
+                'Ambulance': 'ambulance',
+                'Fire Brigade': 'fire',
+                'Disaster': 'disaster',
+                "Women's Help": 'women',
+                'Child Help': 'child',
+            };
+            const sType = serviceKeyMap[service.label] || 'police';
 
             try {
-                const resp = await fetch('https://overpass-api.de/api/interpreter', {
-                    method: 'POST',
-                    body: `data=${encodeURIComponent(query)}`,
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                const res = await api.get('/api/location/nearest', {
+                    params: {
+                        latitude: location?.lat,
+                        longitude: location?.lng,
+                        type: sType,
+                    },
                 });
-                const data = await resp.json();
+
                 if (cancelled) return;
 
-                if (!data.elements || data.elements.length === 0) throw new Error('no results');
-
-                // Pick closest
-                const closest = data.elements
-                    .map((el: any) => {
-                        const eLat = el.lat ?? el.center?.lat ?? 0;
-                        const eLng = el.lon ?? el.center?.lon ?? 0;
-                        return { ...el, _dist: haversineDistance(lat, lng, eLat, eLng), _lat: eLat, _lng: eLng };
-                    })
-                    .sort((a: any, b: any) => a._dist - b._dist)[0];
-
-                const tags = closest.tags || {};
-                const name = tags.name || tags['name:en'] || `Nearest ${service.label}`;
-                const phone = tags.phone || tags['contact:phone'] || tags['contact:mobile'] || service.fallbackNumber;
-                const address = [tags['addr:street'], tags['addr:city'], tags['addr:state']].filter(Boolean).join(', ');
-
-                setStation({
-                    name,
-                    phone: phone.replace(/\s+/g, '').replace(/^00/, '+'),
-                    distance: Math.round(closest._dist),
-                    lat: closest._lat,
-                    lng: closest._lng,
-                    address: address || undefined,
-                    fallback: false,
-                });
+                if (res.data?.stations && res.data.stations.length > 0) {
+                    setAllStations(res.data.stations);
+                    setStation(res.data.stations[0]);
+                } else if (res.data?.closest) {
+                    setAllStations([res.data.closest]);
+                    setStation(res.data.closest);
+                } else {
+                    throw new Error('No station found');
+                }
             } catch {
                 if (!cancelled) {
-                    setStation({
+                    const fallbackStation = {
                         name: `National ${service.label} Helpline`,
                         phone: service.fallbackNumber,
                         distance: 0,
+                        formattedDistance: 'National',
                         lat: 0,
                         lng: 0,
+                        address: 'National 24/7 Emergency Dispatch Center',
                         fallback: true,
-                    });
+                        isLiveOSM: false,
+                    };
+                    setStation(fallbackStation);
+                    setAllStations([fallbackStation]);
                 }
+            } finally {
+                if (!cancelled) setLoading(false);
             }
-            setLoading(false);
         }
         fetchNearest();
         return () => { cancelled = true; };
     }, [service, location]);
 
-    const handleCall = () => {
-        if (!station) return;
+    const handleCall = (targetStation = station) => {
+        if (!targetStation) return;
         setCallInitiated(true);
-        // Log call to backend
         api.post('/api/sos/emergency-call', {
             serviceType: service.label,
-            stationName: station.name,
-            stationPhone: station.phone,
+            stationName: targetStation.name,
+            stationPhone: targetStation.phone,
             latitude: location?.lat ?? 0,
             longitude: location?.lng ?? 0,
-            distance: station.distance,
+            distance: targetStation.distance || 0,
         }).catch(() => { });
         onCallLogged();
-        window.location.href = `tel:${station.phone}`;
+        window.location.href = `tel:${targetStation.phone}`;
+    };
+
+    const handleSelectStation = (st: any, idx: number) => {
+        setSelectedIdx(idx);
+        setStation(st);
+        setCallInitiated(false);
     };
 
     return (
@@ -212,10 +197,12 @@ out center;`;
             <div style={m.modal} onClick={e => e.stopPropagation()}>
                 {/* Header */}
                 <div style={{ ...m.modalHeader, background: service.gradient }}>
-                    <span style={{ fontSize: 48 }}>{service.icon}</span>
-                    <div>
+                    <span style={{ fontSize: 44 }}>{service.icon}</span>
+                    <div style={{ flex: 1 }}>
                         <div style={m.modalTitle}>{service.label} Emergency</div>
-                        <div style={m.modalSubtitle}>Finding nearest {service.label.toLowerCase()} station…</div>
+                        <div style={m.modalSubtitle}>
+                            {loading ? 'Locating closest response unit via GPS…' : `Nearest station found for your coordinates`}
+                        </div>
                     </div>
                     <button style={m.closeBtn} onClick={onClose}>✕</button>
                 </div>
@@ -225,17 +212,35 @@ out center;`;
                     {loading ? (
                         <div style={m.loadingBox}>
                             <div style={m.spinner} />
-                            <div style={m.loadingText}>Searching nearby {service.label.toLowerCase()} stations…</div>
-                            <div style={m.loadingHint}>Using your GPS to find the closest station</div>
+                            <div style={m.loadingText}>Searching live {service.label.toLowerCase()} stations…</div>
+                            <div style={m.loadingHint}>Scanning OpenStreetMap emergency database around your real-time GPS</div>
                         </div>
                     ) : station ? (
                         <>
-                            {station.fallback && (
-                                <div style={m.fallbackBanner}>
-                                    ⚠️ No nearby station found in database — showing national helpline
-                                </div>
-                            )}
+                            {/* Verified Live Badge */}
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                                {station.isLiveOSM ? (
+                                    <span style={{ background: '#10B98122', color: '#10B981', border: '1px solid #10B98144', padding: '4px 10px', borderRadius: 16, fontSize: 11.5, fontWeight: 800, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                                        🟢 Live OpenStreetMap Verified
+                                    </span>
+                                ) : station.fallback ? (
+                                    <span style={{ background: '#F59E0B22', color: '#F59E0B', border: '1px solid #F59E0B44', padding: '4px 10px', borderRadius: 16, fontSize: 11.5, fontWeight: 700 }}>
+                                        ⚠️ National Emergency Helpline
+                                    </span>
+                                ) : (
+                                    <span style={{ background: '#3B82F622', color: '#3B82F6', border: '1px solid #3B82F644', padding: '4px 10px', borderRadius: 16, fontSize: 11.5, fontWeight: 700 }}>
+                                        🏢 Emergency Response Unit
+                                    </span>
+                                )}
 
+                                {station.distance > 0 && (
+                                    <span style={{ background: service.color + '22', color: service.color, border: `1px solid ${service.color}44`, padding: '4px 10px', borderRadius: 16, fontSize: 12, fontWeight: 800 }}>
+                                        📏 {station.formattedDistance || `${(station.distance / 1000).toFixed(1)} km`} away
+                                    </span>
+                                )}
+                            </div>
+
+                            {/* Active Station Card */}
                             <div style={m.stationCard}>
                                 <div style={{ ...m.stationIcon, background: service.color + '22', color: service.color }}>
                                     {service.icon}
@@ -243,44 +248,106 @@ out center;`;
                                 <div style={m.stationInfo}>
                                     <div style={m.stationName}>{station.name}</div>
                                     {station.address && <div style={m.stationAddr}>📍 {station.address}</div>}
-                                    {station.distance > 0 && (
-                                        <div style={{ ...m.distanceBadge, background: service.color + '22', color: service.color }}>
-                                            📏 {formatDistance(station.distance)} away
-                                        </div>
-                                    )}
+                                    <div style={{ fontSize: 12, color: '#aaa', marginTop: 4 }}>
+                                        Type: <strong style={{ color: '#fff' }}>{service.label} Response</strong>
+                                    </div>
                                 </div>
                             </div>
 
+                            {/* Phone Section */}
                             <div style={m.phoneSection}>
-                                <div style={m.phoneLabel}>📞 Contact Number</div>
+                                <div style={m.phoneLabel}>📞 Emergency Phone Line</div>
                                 <div style={{ ...m.phoneNumber, color: service.color }}>{station.phone}</div>
                             </div>
 
+                            {/* Call Button */}
                             {callInitiated ? (
                                 <div style={m.callingBox}>
-                                    <div style={{ fontSize: 40 }}>📞</div>
-                                    <div style={m.callingText}>Calling {station.name}…</div>
-                                    <div style={m.callingHint}>Check your phone application. Alert logged to SafeLink.</div>
+                                    <div style={{ fontSize: 36 }}>📞</div>
+                                    <div style={m.callingText}>Connecting to {station.name}…</div>
+                                    <div style={m.callingHint}>Emergency call logged to SafeLink server. Check dialer.</div>
                                 </div>
                             ) : (
                                 <button
                                     style={{ ...m.callBtn, background: service.gradient, boxShadow: `0 8px 32px ${service.color}66` }}
-                                    onClick={handleCall}
+                                    onClick={() => handleCall(station)}
                                 >
-                                    <span style={{ fontSize: 28 }}>📞</span>
+                                    <span style={{ fontSize: 26 }}>📞</span>
                                     <span style={m.callBtnLabel}>CALL NOW</span>
                                     <span style={m.callBtnNum}>{station.phone}</span>
                                 </button>
                             )}
 
+                            {/* Directions Button */}
                             {station.lat !== 0 && (
                                 <a
-                                    href={`https://maps.google.com/?q=${station.lat},${station.lng}`}
-                                    target="_blank" rel="noopener noreferrer"
+                                    href={station.navigationUrl || `https://www.google.com/maps/dir/?api=1&destination=${station.lat},${station.lng}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
                                     style={m.mapsLink}
                                 >
-                                    🗺️ View {station.name} on Google Maps
+                                    🗺️ Get Real-Time Directions on Google Maps →
                                 </a>
+                            )}
+
+                            {/* Multiple Nearby Stations List */}
+                            {allStations.length > 1 && (
+                                <div style={{ marginTop: 20 }}>
+                                    <div style={{ fontSize: 13, fontWeight: 800, color: '#aaa', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                                        Other Nearby {service.label} Stations ({allStations.length - 1})
+                                    </div>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 180, overflowY: 'auto' }}>
+                                        {allStations.map((st, idx) => {
+                                            if (idx === selectedIdx) return null;
+                                            return (
+                                                <div
+                                                    key={st.id || idx}
+                                                    onClick={() => handleSelectStation(st, idx)}
+                                                    style={{
+                                                        background: '#151928',
+                                                        border: '1px solid #252c43',
+                                                        borderRadius: 12,
+                                                        padding: '10px 14px',
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        justifyContent: 'space-between',
+                                                        cursor: 'pointer',
+                                                        transition: 'border-color .2s',
+                                                    }}
+                                                >
+                                                    <div style={{ flex: 1, paddingRight: 10 }}>
+                                                        <div style={{ color: '#fff', fontSize: 13.5, fontWeight: 700, lineHeight: 1.3 }}>
+                                                            {st.name}
+                                                        </div>
+                                                        <div style={{ color: '#888', fontSize: 11.5, marginTop: 2 }}>
+                                                            {st.formattedDistance || `${(st.distance / 1000).toFixed(1)} km`} · {st.phone}
+                                                        </div>
+                                                    </div>
+                                                    <button
+                                                        type="button"
+                                                        style={{
+                                                            background: service.color + '22',
+                                                            border: `1px solid ${service.color}55`,
+                                                            color: service.color,
+                                                            padding: '6px 12px',
+                                                            borderRadius: 8,
+                                                            fontSize: 12,
+                                                            fontWeight: 700,
+                                                            cursor: 'pointer',
+                                                            whiteSpace: 'nowrap',
+                                                        }}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleCall(st);
+                                                        }}
+                                                    >
+                                                        📞 Call
+                                                    </button>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
                             )}
                         </>
                     ) : null}
@@ -359,18 +426,33 @@ export default function UserPortal({ userInfo, onLogout }: { userInfo: any; onLo
         api.get('/api/broadcast').then(r => setGovAlerts(r.data)).catch(() => {});
     }, []);
 
-    /* ── GPS init ─────────────────────────────────────────────────────────── */
+    /* ── GPS init & Real-Time Tracking ────────────────────────────────────── */
     useEffect(() => {
-        if (!navigator.geolocation) { setLocError('GPS not supported in this browser'); return; }
-        navigator.geolocation.getCurrentPosition(
-            (pos) => {
-                const l = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
-                setLocation(l);
-                api.post('/api/location/update', { latitude: l.lat, longitude: l.lng, accuracy: l.acc }).catch(() => { });
-            },
-            () => setLocError('Location permission denied'),
-            { enableHighAccuracy: true }
-        );
+        const defaultFallback = { lat: 21.1598, lng: 79.1043, acc: 50 };
+
+        if (!navigator.geolocation) {
+            setLocation(defaultFallback);
+            setLocError('GPS not supported — using regional location');
+            return;
+        }
+
+        const onPos = (pos: GeolocationPosition) => {
+            const l = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
+            setLocation(l);
+            setLocError('');
+            api.post('/api/location/update', { latitude: l.lat, longitude: l.lng, accuracy: l.acc }).catch(() => { });
+        };
+
+        const onErr = () => {
+            // If GPS permission is pending or denied, fallback to default coordinates so nearest stations always work!
+            setLocation(prev => prev || defaultFallback);
+            setLocError('Using default city coordinates');
+        };
+
+        navigator.geolocation.getCurrentPosition(onPos, onErr, { enableHighAccuracy: true, timeout: 6000 });
+        const watchId = navigator.geolocation.watchPosition(onPos, onErr, { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 });
+
+        return () => navigator.geolocation.clearWatch(watchId);
     }, []);
 
     /* ── Load data ─────────────────────────────────────────────────────────── */
@@ -791,146 +873,525 @@ export default function UserPortal({ userInfo, onLogout }: { userInfo: any; onLo
 
 /* ─── Portal Styles ──────────────────────────────────────────────────────── */
 const c: Record<string, React.CSSProperties> = {
-    root: { backgroundColor: '#0A0E1A', minHeight: '100vh', color: '#fff', fontFamily: 'Inter, system-ui, sans-serif', paddingBottom: 72 },
+    root: {
+        backgroundColor: 'var(--bg)',
+        backgroundImage: 'var(--bg-gradient)',
+        minHeight: '100vh',
+        color: 'var(--text)',
+        fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif",
+        paddingBottom: 84,
+    },
 
     // Toast
-    toast: { position: 'fixed', top: 72, left: '50%', transform: 'translateX(-50%)', background: '#10B981', color: '#fff', padding: '10px 24px', borderRadius: 30, fontWeight: 700, fontSize: 14, zIndex: 9999, boxShadow: '0 4px 20px #10B98166', animation: 'fadeIn .3s ease', whiteSpace: 'nowrap' as any, maxWidth: '90vw', textAlign: 'center' as any },
+    toast: {
+        position: 'fixed',
+        top: 80,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        background: 'var(--grad-green)',
+        color: '#fff',
+        padding: '12px 28px',
+        borderRadius: 30,
+        fontWeight: 800,
+        fontSize: 14,
+        zIndex: 9999,
+        boxShadow: '0 8px 30px var(--green-glow)',
+        animation: 'fadeIn .3s ease',
+        whiteSpace: 'nowrap' as any,
+        maxWidth: '90vw',
+        textAlign: 'center' as any,
+    },
 
     // Header
-    header: { background: '#151928', borderBottom: '1px solid #252c43', padding: '10px 14px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, position: 'sticky', top: 0, zIndex: 100 },
-    headerTitle: { fontSize: 16, fontWeight: 900, color: '#FF3B3B', letterSpacing: 2 },
-    headerSub: { fontSize: 10, color: '#888', letterSpacing: 1 },
-    gpsGood: { background: '#10B98111', border: '1px solid #10B98133', color: '#10B981', padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600 },
-    gpsBad: { background: '#FF3B3B11', border: '1px solid #FF3B3B33', color: '#FF3B3B', padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600 },
-    gpsWait: { background: '#F59E0B11', border: '1px solid #F59E0B33', color: '#F59E0B', padding: '3px 10px', borderRadius: 20, fontSize: 11, fontWeight: 600 },
-    userChip: { background: '#1E2438', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 600 },
-    logoutBtn: { background: 'none', border: '1px solid #252c43', color: '#888', padding: '5px 10px', borderRadius: 8, cursor: 'pointer', fontSize: 12, minHeight: 32 },
+    header: {
+        background: 'var(--surface-glass)',
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+        borderBottom: '1px solid var(--border)',
+        padding: '14px 20px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 12,
+        position: 'sticky',
+        top: 0,
+        zIndex: 100,
+        boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
+    },
+    headerTitle: {
+        fontSize: 18,
+        fontWeight: 900,
+        background: 'linear-gradient(135deg, #ffffff 30%, #ff4d5e 100%)',
+        WebkitBackgroundClip: 'text',
+        WebkitTextFillColor: 'transparent',
+        letterSpacing: 1,
+    },
+    headerSub: {
+        fontSize: 11,
+        color: 'var(--text-dim)',
+        fontWeight: 700,
+        textTransform: 'uppercase',
+        letterSpacing: 0.8,
+    },
+    gpsGood: {
+        background: 'rgba(16, 185, 129, 0.12)',
+        border: '1px solid rgba(16, 185, 129, 0.3)',
+        color: '#34d399',
+        padding: '5px 12px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 700,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+    },
+    gpsBad: {
+        background: 'rgba(255, 56, 73, 0.12)',
+        border: '1px solid rgba(255, 56, 73, 0.3)',
+        color: '#ff5e6d',
+        padding: '5px 12px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 700,
+    },
+    gpsWait: {
+        background: 'rgba(245, 158, 11, 0.12)',
+        border: '1px solid rgba(245, 158, 11, 0.3)',
+        color: '#fbbf24',
+        padding: '5px 12px',
+        borderRadius: 20,
+        fontSize: 11.5,
+        fontWeight: 700,
+    },
+    userChip: {
+        background: 'var(--surface2)',
+        border: '1px solid var(--border)',
+        padding: '5px 12px',
+        borderRadius: 20,
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: '#fff',
+    },
+    logoutBtn: {
+        background: 'rgba(255, 56, 73, 0.1)',
+        border: '1px solid rgba(255, 56, 73, 0.3)',
+        color: '#ff5e6d',
+        padding: '6px 14px',
+        borderRadius: 10,
+        cursor: 'pointer',
+        fontSize: 12.5,
+        fontWeight: 700,
+        transition: 'all 0.2s',
+    },
 
     // Tab bar — touch-friendly
-    tabBar: { display: 'flex', background: '#111827', borderBottom: '1px solid #1E2438', overflowX: 'auto' as any },
-    tabBtn: { flex: 1, minWidth: 56, padding: '10px 4px', border: 'none', borderBottom: '2px solid transparent', background: 'transparent', color: '#888', fontWeight: 600, fontSize: 11, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, transition: 'all .2s', minHeight: 56 } as any,
-    tabActive: { color: '#FF3B3B', borderBottomColor: '#FF3B3B', background: '#FF3B3B08' },
-    tabLabel: { fontSize: 9 },
+    tabBar: {
+        display: 'flex',
+        background: 'var(--surface2)',
+        borderBottom: '1px solid var(--border)',
+        overflowX: 'auto' as any,
+        padding: '4px 8px',
+        gap: 6,
+    },
+    tabBtn: {
+        flex: 1,
+        minWidth: 64,
+        padding: '10px 8px',
+        border: 'none',
+        borderRadius: 12,
+        background: 'transparent',
+        color: 'var(--text-muted)',
+        fontWeight: 700,
+        fontSize: 12,
+        cursor: 'pointer',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 4,
+        transition: 'all .2s ease',
+        minHeight: 52,
+    } as any,
+    tabActive: {
+        color: '#fff',
+        background: 'var(--grad-red)',
+        boxShadow: '0 4px 16px var(--red-glow)',
+    },
+    tabLabel: { fontSize: 10.5, fontWeight: 700 },
 
     // Content
-    content: { padding: '16px 14px', maxWidth: 680, margin: '0 auto' },
+    content: { padding: '20px 16px', maxWidth: 740, margin: '0 auto' },
 
     // Home
-    homeGrid: { display: 'flex', flexDirection: 'column', gap: 20 },
-    hint: { color: '#888', fontSize: 13, lineHeight: 1.6, marginBottom: 14, marginTop: -2 },
+    homeGrid: { display: 'flex', flexDirection: 'column', gap: 24 },
+    hint: { color: 'var(--text-muted)', fontSize: 13.5, lineHeight: 1.6, marginBottom: 16 },
 
     // SOS
-    sosSection: { display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', paddingTop: 8 },
-    sosBtn: { background: 'none', border: 'none', cursor: 'pointer', position: 'relative', width: 200, height: 200 },
-    sosBtnInner: { position: 'absolute', inset: 0, borderRadius: '50%', background: 'radial-gradient(circle at 38% 35%, #ff6b6b, #FF3B3B, #b00000)', boxShadow: '0 0 60px #FF3B3B77, 0 0 100px #FF3B3B33', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 },
-    sosPulse: { position: 'absolute', inset: -12, borderRadius: '50%', border: '2px solid #FF3B3B55', animation: 'ping 2s ease-in-out infinite' } as any,
-    sosBtnLabel: { color: '#fff', fontWeight: 900, fontSize: 28, letterSpacing: 6 },
-    sosBtnHint: { color: 'rgba(255,255,255,0.65)', fontSize: 11, marginTop: 2 },
-    sosCaption: { color: '#444', fontSize: 12, marginTop: 12, maxWidth: 280 },
+    sosSection: { display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', paddingTop: 10 },
+    sosBtn: { background: 'none', border: 'none', cursor: 'pointer', position: 'relative', width: 220, height: 220 },
+    sosBtnInner: {
+        position: 'absolute',
+        inset: 0,
+        borderRadius: '50%',
+        background: 'radial-gradient(circle at 35% 35%, #ff5264, #e6132d 60%, #990012 100%)',
+        boxShadow: '0 0 70px rgba(255, 56, 73, 0.6), 0 0 120px rgba(255, 56, 73, 0.25)',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 4,
+        transition: 'transform 0.15s ease',
+    },
+    sosPulse: {
+        position: 'absolute',
+        inset: -16,
+        borderRadius: '50%',
+        border: '3px solid rgba(255, 56, 73, 0.45)',
+        animation: 'ping 2s cubic-bezier(0, 0, 0.2, 1) infinite',
+    } as any,
+    sosBtnLabel: { color: '#fff', fontWeight: 900, fontSize: 34, letterSpacing: 6 },
+    sosBtnHint: { color: 'rgba(255,255,255,0.85)', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 },
+    sosCaption: { color: 'var(--text-dim)', fontSize: 12.5, marginTop: 16, maxWidth: 320, fontWeight: 500 },
 
     // Countdown
-    countdownWrap: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 },
-    countdownNum: { fontSize: 100, fontWeight: 900, color: '#FF3B3B', lineHeight: 1 },
-    cancelBtn: { background: '#1E2438', border: '1px solid #FF3B3B55', color: '#FF3B3B', padding: '12px 32px', borderRadius: 12, cursor: 'pointer', fontWeight: 700, fontSize: 15, minHeight: 48 },
+    countdownWrap: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 },
+    countdownNum: { fontSize: 110, fontWeight: 900, color: '#ff3849', lineHeight: 1, textShadow: '0 0 40px rgba(255,56,73,0.8)' },
+    cancelBtn: {
+        background: 'var(--surface2)',
+        border: '2px solid rgba(255, 56, 73, 0.5)',
+        color: '#ff5e6d',
+        padding: '14px 36px',
+        borderRadius: 14,
+        cursor: 'pointer',
+        fontWeight: 800,
+        fontSize: 16,
+        boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
+    },
 
     // SOS sent
-    sentCard: { background: '#10B98111', border: '1px solid #10B98133', borderRadius: 20, padding: '28px 20px', textAlign: 'center', width: '100%' },
-    sentTitle: { fontSize: 22, fontWeight: 900, color: '#10B981', marginTop: 10 },
-    sentSub: { color: '#888', fontSize: 14, lineHeight: 1.6, marginTop: 10, maxWidth: 340, margin: '10px auto 0' },
+    sentCard: {
+        background: 'linear-gradient(180deg, rgba(16, 185, 129, 0.15) 0%, rgba(14, 19, 34, 0.95) 100%)',
+        border: '1px solid rgba(16, 185, 129, 0.4)',
+        borderRadius: 24,
+        padding: '32px 24px',
+        textAlign: 'center',
+        width: '100%',
+        boxShadow: '0 12px 40px var(--green-glow)',
+    },
+    sentTitle: { fontSize: 24, fontWeight: 900, color: '#34d399', marginTop: 12 },
+    sentSub: { color: 'var(--text-muted)', fontSize: 14, lineHeight: 1.6, marginTop: 12, maxWidth: 360, margin: '12px auto 0' },
 
     // Emergency service grid
-    section: { display: 'flex', flexDirection: 'column', gap: 12 },
-    sectionTitle: { fontSize: 15, fontWeight: 700, color: '#fff', marginBottom: 4 },
-    serviceGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 },
-    serviceCard: { background: '#151928', border: '1px solid', borderRadius: 14, padding: '14px 8px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, cursor: 'pointer', transition: 'transform .15s, box-shadow .15s' } as any,
-    serviceIconWrap: { width: 50, height: 50, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 2 },
-    serviceNum: { fontSize: 16, fontWeight: 900 },
-    serviceLabel: { color: '#ccc', fontSize: 11, fontWeight: 700 },
-    serviceCta: { fontSize: 10, fontWeight: 600, opacity: 0.8 },
+    section: { display: 'flex', flexDirection: 'column', gap: 14 },
+    sectionTitle: { fontSize: 17, fontWeight: 800, color: '#fff', letterSpacing: -0.3 },
+    serviceGrid: { display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 },
+    serviceCard: {
+        background: 'var(--grad-surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 18,
+        padding: '18px 12px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 8,
+        cursor: 'pointer',
+        transition: 'all .2s ease',
+        boxShadow: 'var(--shadow-sm)',
+    } as any,
+    serviceIconWrap: { width: 54, height: 54, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26 },
+    serviceNum: { fontSize: 17, fontWeight: 900, letterSpacing: 0.5 },
+    serviceLabel: { color: '#fff', fontSize: 12, fontWeight: 800 },
+    serviceCta: { fontSize: 11, fontWeight: 700, color: 'var(--text-muted)' },
 
     // Status chips
     statusRow: { display: 'flex', gap: 8, flexWrap: 'wrap' as any },
-    statusChip: { background: '#151928', border: '1px solid #252c43', borderRadius: 20, padding: '7px 12px', fontSize: 12, display: 'flex', gap: 8, alignItems: 'center' },
+    statusChip: {
+        background: 'var(--surface2)',
+        border: '1px solid var(--border)',
+        borderRadius: 20,
+        padding: '8px 14px',
+        fontSize: 12.5,
+        display: 'flex',
+        gap: 8,
+        alignItems: 'center',
+        fontWeight: 600,
+    },
 
     // Alert tab
-    successBanner: { background: '#10B98122', border: '1px solid #10B98144', color: '#10B981', padding: '12px 16px', borderRadius: 12, fontWeight: 600, fontSize: 14, marginBottom: 20 },
-    quickGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 10, marginBottom: 8 },
-    quickCard: { background: '#151928', border: '1px solid #1E2438', borderRadius: 14, padding: '16px 10px', cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, transition: 'background .15s' },
-    quickLabel: { fontSize: 12, fontWeight: 600, color: '#ccc', textAlign: 'center' as any },
-    textarea: { background: '#1E2438', border: '1px solid #2A3050', borderRadius: 12, padding: '14px', color: '#fff', fontSize: 14, width: '100%', resize: 'vertical' as any, lineHeight: 1.6, outline: 'none', marginBottom: 12, boxSizing: 'border-box' as any },
-    sendBtn: { background: '#FF3B3B', border: 'none', color: '#fff', borderRadius: 12, padding: '14px', fontWeight: 800, fontSize: 15, cursor: 'pointer', width: '100%', transition: 'opacity .2s', minHeight: 48 },
-    tipBox: { background: '#3B82F611', border: '1px solid #3B82F633', color: '#3B82F6', borderRadius: 12, padding: '12px 16px', fontSize: 13, lineHeight: 1.6, marginTop: 16 },
+    successBanner: { background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.4)', color: '#34d399', padding: '14px 18px', borderRadius: 14, fontWeight: 700, fontSize: 14, marginBottom: 20 },
+    quickGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 12 },
+    quickCard: {
+        background: 'var(--grad-surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 16,
+        padding: '18px 14px',
+        cursor: 'pointer',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 10,
+        transition: 'all .2s ease',
+        boxShadow: 'var(--shadow-sm)',
+    },
+    quickLabel: { fontSize: 13, fontWeight: 700, color: '#fff', textAlign: 'center' as any },
+    textarea: {
+        background: 'var(--surface2)',
+        border: '1px solid var(--border)',
+        borderRadius: 14,
+        padding: '16px',
+        color: '#fff',
+        fontSize: 14.5,
+        width: '100%',
+        resize: 'vertical' as any,
+        lineHeight: 1.6,
+        outline: 'none',
+        marginBottom: 14,
+        boxSizing: 'border-box' as any,
+    },
+    sendBtn: {
+        background: 'var(--grad-red)',
+        border: 'none',
+        color: '#fff',
+        borderRadius: 14,
+        padding: '16px',
+        fontWeight: 800,
+        fontSize: 15,
+        cursor: 'pointer',
+        width: '100%',
+        boxShadow: '0 6px 20px var(--red-glow)',
+        transition: 'all .2s ease',
+    },
+    tipBox: {
+        background: 'rgba(59, 130, 246, 0.1)',
+        border: '1px solid rgba(59, 130, 246, 0.3)',
+        color: '#93c5fd',
+        borderRadius: 16,
+        padding: '16px 20px',
+        fontSize: 13.5,
+        lineHeight: 1.6,
+        marginTop: 18,
+    },
 
     // Map tab
-    coordCard: { background: '#151928', border: '1px solid #252c43', borderRadius: 14, padding: '14px 16px', marginBottom: 14, display: 'flex', flexDirection: 'column', gap: 10 },
-    coordRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid #1E2438', paddingBottom: 8, flexWrap: 'wrap' as any, gap: 4 },
-    coordLabel: { color: '#888', fontSize: 13, fontWeight: 600 },
-    coordValue: { color: '#fff', fontSize: 14, fontFamily: 'monospace', fontWeight: 700 },
-    mapFrame: { height: 300, borderRadius: 12, overflow: 'hidden', border: '1px solid #252c43', marginBottom: 14 },
-    openMapsBtn: { display: 'block', textAlign: 'center' as any, background: '#1E2438', border: '1px solid #3B82F644', color: '#3B82F6', borderRadius: 10, padding: '12px', fontWeight: 700, fontSize: 14, textDecoration: 'none', minHeight: 48, lineHeight: '24px' },
+    coordCard: {
+        background: 'var(--grad-surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 18,
+        padding: '18px 20px',
+        marginBottom: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+    },
+    coordRow: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', paddingBottom: 10, flexWrap: 'wrap' as any, gap: 4 },
+    coordLabel: { color: 'var(--text-muted)', fontSize: 13, fontWeight: 600 },
+    coordValue: { color: '#fff', fontSize: 14, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 },
+    mapFrame: { height: 320, borderRadius: 16, overflow: 'hidden', border: '1px solid var(--border)', marginBottom: 16 },
+    openMapsBtn: { display: 'block', textAlign: 'center' as any, background: 'var(--surface2)', border: '1px solid var(--border)', color: '#60a5fa', borderRadius: 12, padding: '14px', fontWeight: 800, fontSize: 14, textDecoration: 'none' },
 
     // History tab
-    refreshBtn: { background: 'none', border: '1px solid #252c43', color: '#888', padding: '7px 14px', borderRadius: 8, cursor: 'pointer', fontSize: 13, fontWeight: 600 },
-    emptyState: { background: '#151928', border: '1px solid #252c43', borderRadius: 16, padding: '48px 20px', textAlign: 'center' as any, fontSize: 14 },
-    alertCard: { background: '#151928', border: '1px solid #252c43', borderLeft: '4px solid', borderRadius: 12, padding: '14px 16px', marginBottom: 10 },
-    alertTop: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' as any },
-    alertBadge: { padding: '3px 10px', borderRadius: 6, fontSize: 11, fontWeight: 800 },
-    alertMsg: { color: '#ccc', fontSize: 14, lineHeight: 1.5, margin: '0 0 6px' },
+    refreshBtn: { background: 'var(--surface2)', border: '1px solid var(--border)', color: '#fff', padding: '8px 16px', borderRadius: 10, cursor: 'pointer', fontSize: 13, fontWeight: 700 },
+    emptyState: { background: 'var(--grad-surface)', border: '1px solid var(--border)', borderRadius: 20, padding: '54px 20px', textAlign: 'center' as any, fontSize: 14 },
+    alertCard: { background: 'var(--grad-surface)', border: '1px solid var(--border)', borderLeft: '4px solid', borderRadius: 16, padding: '16px 20px', marginBottom: 12 },
+    alertTop: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' as any },
+    alertBadge: { padding: '4px 12px', borderRadius: 8, fontSize: 11, fontWeight: 800 },
+    alertMsg: { color: '#e2e8f0', fontSize: 14, lineHeight: 1.5, margin: '0 0 8px' },
 
     // Profile tab
-    profileCard: { background: '#151928', border: '1px solid #252c43', borderRadius: 16, padding: '20px', display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: 16, alignItems: isMobile ? 'center' : 'flex-start', marginBottom: 20, textAlign: isMobile ? 'center' : 'left' } as any,
-    profileAvatar: { width: 56, height: 56, borderRadius: '50%', background: 'linear-gradient(135deg, #FF3B3B, #b00000)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 24, fontWeight: 900, color: '#fff', flexShrink: 0 },
-    profileName: { fontSize: 18, fontWeight: 800, marginBottom: 4 },
-    profileEmail: { color: '#888', fontSize: 13, marginBottom: 8 },
-    profileRole: { color: '#666', fontSize: 12, marginBottom: 2 },
-    profileEmergBtn: { background: 'transparent', border: '1px solid', borderRadius: 8, padding: '8px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600, textAlign: 'left' as any },
-    statsRow: { display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: 10 } as any,
-    statCard: { background: '#151928', border: '1px solid #252c43', borderRadius: 14, padding: '16px', textAlign: 'center' as any },
-    statNum: { fontSize: 28, fontWeight: 900, marginBottom: 4 },
-    statLabel: { color: '#888', fontSize: 12, fontWeight: 600 },
+    profileCard: {
+        background: 'var(--grad-surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 20,
+        padding: '24px',
+        display: 'flex',
+        flexDirection: isMobile ? 'column' : 'row',
+        gap: 20,
+        alignItems: isMobile ? 'center' : 'flex-start',
+        marginBottom: 24,
+        textAlign: isMobile ? 'center' : 'left',
+    } as any,
+    profileAvatar: { width: 64, height: 64, borderRadius: '50%', background: 'var(--grad-red)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, fontWeight: 900, color: '#fff', flexShrink: 0, boxShadow: '0 8px 24px var(--red-glow)' },
+    profileName: { fontSize: 20, fontWeight: 900, marginBottom: 4, color: '#fff' },
+    profileEmail: { color: 'var(--text-muted)', fontSize: 13.5, marginBottom: 10 },
+    profileRole: { color: 'var(--text-dim)', fontSize: 12.5, marginBottom: 4 },
+    profileEmergBtn: { background: 'var(--surface2)', border: '1px solid', borderRadius: 10, padding: '10px 14px', cursor: 'pointer', fontSize: 12.5, fontWeight: 700, textAlign: 'left' as any },
+    statsRow: { display: 'grid', gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: 12 } as any,
+    statCard: { background: 'var(--grad-surface)', border: '1px solid var(--border)', borderRadius: 16, padding: '18px', textAlign: 'center' as any },
+    statNum: { fontSize: 32, fontWeight: 900, marginBottom: 4 },
+    statLabel: { color: 'var(--text-muted)', fontSize: 12.5, fontWeight: 700 },
 
     // Bottom strip
-    strip: { position: 'fixed', bottom: 0, left: 0, right: 0, background: '#0D1120', borderTop: '1px solid #1E2438', padding: '8px 12px', display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' as any, zIndex: 200 },
-    stripBtn: { border: '1px solid', borderRadius: 20, padding: '6px 14px', fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' as any, cursor: 'pointer', background: 'transparent' },
+    strip: {
+        position: 'fixed',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        background: 'rgba(10, 14, 26, 0.88)',
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+        borderTop: '1px solid var(--border)',
+        padding: '10px 16px',
+        display: 'flex',
+        gap: 10,
+        justifyContent: 'center',
+        flexWrap: 'wrap' as any,
+        zIndex: 200,
+        boxShadow: '0 -8px 24px rgba(0,0,0,0.4)',
+    },
+    stripBtn: {
+        border: '1px solid',
+        borderRadius: 24,
+        padding: '8px 16px',
+        fontSize: 12.5,
+        fontWeight: 800,
+        whiteSpace: 'nowrap' as any,
+        cursor: 'pointer',
+        background: 'var(--surface2)',
+        transition: 'transform .15s',
+    },
 };
 
 /* ─── Modal Styles ───────────────────────────────────────────────────────── */
 const m: Record<string, React.CSSProperties> = {
-    overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.80)', backdropFilter: 'blur(6px)', zIndex: 1000, display: 'flex', alignItems: 'flex-end', justifyContent: 'center', animation: 'overlayIn .25s ease' } as any,
-    modal: { background: '#111827', borderRadius: '24px 24px 0 0', width: '100%', maxWidth: 560, maxHeight: '88vh', overflowY: 'auto', animation: 'fadeIn .3s ease' } as any,
+    overlay: {
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(4, 7, 16, 0.82)',
+        backdropFilter: 'blur(8px)',
+        WebkitBackdropFilter: 'blur(8px)',
+        zIndex: 1000,
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+        animation: 'overlayIn .25s ease',
+    } as any,
+    modal: {
+        background: 'linear-gradient(180deg, #131a30 0%, #0c1020 100%)',
+        border: '1px solid var(--border)',
+        borderRadius: '28px 28px 0 0',
+        width: '100%',
+        maxWidth: 580,
+        maxHeight: '90vh',
+        overflowY: 'auto',
+        animation: 'fadeIn .3s ease',
+        boxShadow: '0 -20px 60px rgba(0, 0, 0, 0.7)',
+    } as any,
 
-    modalHeader: { padding: '24px 20px 20px', display: 'flex', alignItems: 'center', gap: 16, borderRadius: '24px 24px 0 0', position: 'relative' },
-    modalTitle: { fontSize: 20, fontWeight: 900, color: '#fff' },
-    modalSubtitle: { fontSize: 13, color: 'rgba(255,255,255,0.7)', marginTop: 2 },
-    closeBtn: { position: 'absolute', top: 16, right: 16, background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff', width: 34, height: 34, borderRadius: '50%', cursor: 'pointer', fontSize: 16, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center' },
+    modalHeader: {
+        padding: '24px 22px 20px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 16,
+        borderRadius: '28px 28px 0 0',
+        position: 'relative',
+        boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
+    },
+    modalTitle: { fontSize: 21, fontWeight: 900, color: '#fff', letterSpacing: -0.3 },
+    modalSubtitle: { fontSize: 13, color: 'rgba(255,255,255,0.85)', marginTop: 2, fontWeight: 600 },
+    closeBtn: {
+        position: 'absolute',
+        top: 18,
+        right: 18,
+        background: 'rgba(255,255,255,0.2)',
+        border: 'none',
+        color: '#fff',
+        width: 36,
+        height: 36,
+        borderRadius: '50%',
+        cursor: 'pointer',
+        fontSize: 16,
+        fontWeight: 800,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        transition: 'background 0.2s',
+    },
 
-    modalBody: { padding: '20px' },
+    modalBody: { padding: '22px' },
 
-    loadingBox: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, padding: '40px 0' },
-    spinner: { width: 48, height: 48, border: '4px solid #1E2438', borderTop: '4px solid #3B82F6', borderRadius: '50%', animation: 'spin 0.8s linear infinite' } as any,
-    loadingText: { color: '#fff', fontSize: 16, fontWeight: 700 },
-    loadingHint: { color: '#888', fontSize: 13 },
+    loadingBox: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, padding: '44px 0' },
+    spinner: { width: 50, height: 50, border: '4px solid #1E2438', borderTop: '4px solid #3B82F6', borderRadius: '50%', animation: 'spin 0.8s linear infinite' } as any,
+    loadingText: { color: '#fff', fontSize: 16.5, fontWeight: 800 },
+    loadingHint: { color: 'var(--text-muted)', fontSize: 13 },
 
-    fallbackBanner: { background: '#F59E0B11', border: '1px solid #F59E0B33', color: '#F59E0B', borderRadius: 10, padding: '10px 14px', fontSize: 13, marginBottom: 16 },
+    fallbackBanner: { background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.35)', color: '#fbbf24', borderRadius: 12, padding: '12px 16px', fontSize: 13, marginBottom: 16, fontWeight: 600 },
 
-    stationCard: { background: '#1E2438', borderRadius: 16, padding: '18px', display: 'flex', gap: 16, alignItems: 'flex-start', marginBottom: 20 },
-    stationIcon: { width: 56, height: 56, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, flexShrink: 0 },
+    stationCard: {
+        background: 'var(--grad-surface)',
+        border: '1px solid var(--border)',
+        borderRadius: 18,
+        padding: '20px',
+        display: 'flex',
+        gap: 16,
+        alignItems: 'flex-start',
+        marginBottom: 20,
+        boxShadow: 'var(--shadow-sm)',
+    },
+    stationIcon: {
+        width: 58,
+        height: 58,
+        borderRadius: '50%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 28,
+        flexShrink: 0,
+    },
     stationInfo: { flex: 1 },
-    stationName: { fontSize: 17, fontWeight: 800, color: '#fff', marginBottom: 4, lineHeight: 1.3 },
-    stationAddr: { color: '#888', fontSize: 13, marginBottom: 8 },
-    distanceBadge: { display: 'inline-block', padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 700 },
+    stationName: { fontSize: 18, fontWeight: 900, color: '#fff', marginBottom: 6, lineHeight: 1.3 },
+    stationAddr: { color: 'var(--text-muted)', fontSize: 13, marginBottom: 8, lineHeight: 1.5 },
+    distanceBadge: { display: 'inline-block', padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 800 },
 
-    phoneSection: { background: '#0A0E1A', borderRadius: 14, padding: '16px 20px', marginBottom: 20, textAlign: 'center' as any },
-    phoneLabel: { color: '#888', fontSize: 12, fontWeight: 600, marginBottom: 4 },
-    phoneNumber: { fontSize: 32, fontWeight: 900, letterSpacing: 2, fontFamily: 'monospace' },
+    phoneSection: {
+        background: 'rgba(0, 0, 0, 0.35)',
+        border: '1px solid var(--border)',
+        borderRadius: 16,
+        padding: '18px 20px',
+        marginBottom: 20,
+        textAlign: 'center' as any,
+    },
+    phoneLabel: { color: 'var(--text-muted)', fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4 },
+    phoneNumber: { fontSize: 34, fontWeight: 900, letterSpacing: 2, fontFamily: "'JetBrains Mono', monospace" },
 
-    callBtn: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, width: '100%', border: 'none', borderRadius: 16, padding: '18px', cursor: 'pointer', marginBottom: 12, animation: 'callPulse 2s ease-in-out infinite' } as any,
-    callBtnLabel: { color: '#fff', fontWeight: 900, fontSize: 22, letterSpacing: 2 },
-    callBtnNum: { color: 'rgba(255,255,255,0.8)', fontSize: 14, fontFamily: 'monospace' },
+    callBtn: {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 12,
+        width: '100%',
+        border: 'none',
+        borderRadius: 16,
+        padding: '18px',
+        cursor: 'pointer',
+        marginBottom: 14,
+        animation: 'callPulse 2s ease-in-out infinite',
+        boxShadow: 'var(--shadow-md)',
+    } as any,
+    callBtnLabel: { color: '#fff', fontWeight: 900, fontSize: 20, letterSpacing: 2 },
+    callBtnNum: { color: 'rgba(255,255,255,0.85)', fontSize: 15, fontFamily: "'JetBrains Mono', monospace", fontWeight: 700 },
 
-    callingBox: { background: '#10B98111', border: '1px solid #10B98133', borderRadius: 14, padding: '24px', textAlign: 'center' as any, marginBottom: 12 },
-    callingText: { color: '#10B981', fontWeight: 800, fontSize: 18, marginTop: 8 },
-    callingHint: { color: '#888', fontSize: 13, marginTop: 6 },
+    callingBox: {
+        background: 'rgba(16, 185, 129, 0.12)',
+        border: '1px solid rgba(16, 185, 129, 0.35)',
+        borderRadius: 16,
+        padding: '24px',
+        textAlign: 'center' as any,
+        marginBottom: 14,
+    },
+    callingText: { color: '#34d399', fontWeight: 900, fontSize: 18, marginTop: 8 },
+    callingHint: { color: 'var(--text-muted)', fontSize: 13, marginTop: 6 },
 
-    mapsLink: { display: 'block', textAlign: 'center' as any, color: '#3B82F6', fontSize: 13, textDecoration: 'none', fontWeight: 600, padding: '10px', borderRadius: 10, border: '1px solid #3B82F633', background: '#3B82F611' },
+    mapsLink: {
+        display: 'block',
+        textAlign: 'center' as any,
+        color: '#60a5fa',
+        fontSize: 13.5,
+        textDecoration: 'none',
+        fontWeight: 800,
+        padding: '13px',
+        borderRadius: 12,
+        border: '1px solid rgba(59, 130, 246, 0.3)',
+        background: 'rgba(59, 130, 246, 0.1)',
+        transition: 'all 0.2s',
+    },
 };

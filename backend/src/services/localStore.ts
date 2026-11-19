@@ -46,7 +46,13 @@ export const localStore = {
     /** Query documents by a single field value */
     where<T>(collection: string, field: keyof T, value: any): (T & { _id: string })[] {
         const col = readCollection<T>(collection);
-        return Object.values(col).filter((doc: any) => doc[field] === value) as any[];
+        return Object.values(col).filter((doc: any) => {
+            if (doc[field] === value) return true;
+            if (typeof doc[field] === 'string' && typeof value === 'string') {
+                return doc[field].trim().toLowerCase() === value.trim().toLowerCase();
+            }
+            return false;
+        }) as any[];
     },
 
     /** Get all documents in a collection, sorted by a field descending */

@@ -40,6 +40,24 @@ export function callEmergencyService(type: SOSType): void {
     Linking.openURL(`tel:${number}`);
 }
 
+export async function findNearestEmergencyStation(type: string): Promise<any | null> {
+    try {
+        let latitude = 0, longitude = 0;
+        try {
+            const loc = await getCurrentLocation();
+            latitude = loc.latitude;
+            longitude = loc.longitude;
+        } catch { }
+
+        const res = await api.get('/api/location/nearest', {
+            params: { latitude, longitude, type: type.toLowerCase() },
+        });
+        return res.data?.closest || null;
+    } catch {
+        return null;
+    }
+}
+
 export async function getSavedAlerts(): Promise<any[]> {
     try {
         const res = await api.get('/api/admin/alerts');
