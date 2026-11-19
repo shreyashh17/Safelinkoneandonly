@@ -49,7 +49,7 @@ router.get('/contacts/:zoneId', authenticate, async (req, res) => {
         const { firestore } = await import('../services/firebase');
         const snap = await firestore.collection('eventContacts')
             .where('zoneId', '==', zoneId).orderBy('timestamp', 'desc').get();
-        res.json(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        res.json(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })));
         return;
     }
     res.json(localStore.where<any>('eventContacts', 'zoneId', zoneId));

@@ -63,7 +63,7 @@ router.get('/', authenticate, async (_req, res) => {
     if (isFirebase()) {
         const { firestore } = await import('../services/firebase');
         const snap = await firestore.collection('complaints').orderBy('createdAt', 'desc').limit(50).get();
-        res.json(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        res.json(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })));
         return;
     }
     res.json(localStore.getAll('complaints', 'createdAt'));

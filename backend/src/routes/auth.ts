@@ -17,15 +17,20 @@ async function findUserByEmail(email: string): Promise<any | null> {
     if (!clean) return null;
 
     if (isFirebaseConfigured()) {
-        const { firestore } = await import('../services/firebase');
-        const snap = await firestore.collection('users').get();
-        for (const doc of snap.docs) {
-            const d = doc.data();
-            if (d.email?.trim().toLowerCase() === clean) {
-                return { uid: doc.id, ...d };
+        try {
+            const { firestore } = await import('../services/firebase');
+            if (firestore) {
+                const snap = await firestore.collection('users').get();
+                for (const doc of snap.docs) {
+                    const d = doc.data();
+                    if (d.email?.trim().toLowerCase() === clean) {
+                        return { uid: doc.id, ...d };
+                    }
+                }
             }
+        } catch (err: any) {
+            console.warn('⚠️ Firestore read warning, using localStore fallback:', err.message);
         }
-        return null;
     }
 
     const allUsers = localStore.getAll<any>('users');
@@ -33,12 +38,17 @@ async function findUserByEmail(email: string): Promise<any | null> {
 }
 
 async function saveUser(uid: string, data: object): Promise<void> {
-    if (isFirebaseConfigured()) {
-        const { firestore } = await import('../services/firebase');
-        await firestore.collection('users').doc(uid).set(data, { merge: true });
-        return;
-    }
     localStore.set('users', uid, data);
+    if (isFirebaseConfigured()) {
+        try {
+            const { firestore } = await import('../services/firebase');
+            if (firestore) {
+                await firestore.collection('users').doc(uid).set(data, { merge: true });
+            }
+        } catch (err: any) {
+            console.warn('⚠️ Firestore sync warning:', err.message);
+        }
+    }
 }
 
 // ── Register (Citizen or Admin) ──────────────────────────────────────────────

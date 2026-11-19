@@ -18,7 +18,7 @@ router.get('/alerts', authenticate, async (req: AuthRequest, res) => {
             .orderBy('timestamp', 'desc')
             .limit(20)
             .get();
-        res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        res.json(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })));
         return;
     }
     const all = localStore.where<any>('alerts', 'uid', uid);
@@ -36,7 +36,7 @@ router.get('/complaints', authenticate, async (req: AuthRequest, res) => {
             .orderBy('createdAt', 'desc')
             .limit(20)
             .get();
-        res.json(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+        res.json(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })));
         return;
     }
     const all = localStore.where<any>('complaints', 'uid', uid);

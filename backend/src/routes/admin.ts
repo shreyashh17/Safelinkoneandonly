@@ -21,7 +21,7 @@ router.get('/alerts', authenticate, requireAdmin, async (_req, res) => {
     if (isFirebase()) {
         const { firestore } = await import('../services/firebase');
         const snap = await firestore.collection('alerts').orderBy('timestamp', 'desc').limit(100).get();
-        res.json(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        res.json(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })));
         return;
     }
     res.json(localStore.getAll('alerts', 'timestamp'));
@@ -41,7 +41,7 @@ router.get('/complaints', authenticate, requireAdmin, async (_req, res) => {
     if (isFirebase()) {
         const { firestore } = await import('../services/firebase');
         const snap = await firestore.collection('complaints').orderBy('createdAt', 'desc').limit(200).get();
-        res.json(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        res.json(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })));
         return;
     }
     res.json(localStore.getAll('complaints', 'createdAt'));
@@ -60,7 +60,7 @@ router.get('/crowd-density', authenticate, requireAdmin, async (_req, res) => {
         ? await (async () => {
             const { firestore } = await import('../services/firebase');
             const snap = await firestore.collection('geofenceZones').where('active', '==', true).get();
-            return snap.docs.map((d) => ({ id: d.id, ...d.data() })) as any[];
+            return snap.docs.map((d: any) => ({ id: d.id, ...d.data() })) as any[];
         })()
         : localStore.getAll<any>('geofenceZones').filter((z) => z.active);
 
@@ -79,7 +79,7 @@ router.get('/users', authenticate, requireAdmin, async (_req, res) => {
     if (isFirebase()) {
         const { firestore } = await import('../services/firebase');
         const snap = await firestore.collection('users').orderBy('createdAt', 'desc').limit(200).get();
-        res.json(snap.docs.map(d => {
+        res.json(snap.docs.map((d: any) => {
             const { passwordHash, ...safe } = d.data() as any;
             return { id: d.id, ...safe };
         }));
