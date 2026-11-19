@@ -5,10 +5,6 @@ import { broadcast } from '../services/websocket';
 import axios from 'axios';
 
 const router = Router();
-const isFirebase = () => {
-    const p = process.env.FIREBASE_PROJECT_ID;
-    return !!p && p !== 'your_firebase_project_id';
-};
 
 /* ── Find nearest police station via OpenStreetMap Overpass API ────────────── */
 async function findNearestPolicePhone(lat: number, lng: number): Promise<string | null> {
@@ -50,21 +46,7 @@ router.post('/trigger', authenticate, async (req: AuthRequest, res) => {
         status: 'active', timestamp: new Date().toISOString(),
     };
 
-    if (isFirebase()) {
-        const { db, firestore, messaging } = await import('../services/firebase');
-        await db.ref(`alerts/${alertId}`).set(alert);
-        await firestore.collection('alerts').doc(alertId).set(alert);
-        try {
-            await messaging.send({
-                topic: 'admins',
-                notification: { title: '🚨 SOS ALERT', body: `New emergency from user ${uid}` },
-                data: { alertId, latitude: String(latitude), longitude: String(longitude) },
-            });
-        } catch { }
-    } else {
-        localStore.set('alerts', alertId, alert);
-    }
-
+    localStore.set('alerts', alertId, alert);
     broadcast('SOS_ALERT', alert);
 
     // SMS to admin emergency number
@@ -101,13 +83,7 @@ router.post('/trigger', authenticate, async (req: AuthRequest, res) => {
 /* ── Resolve Alert ─────────────────────────────────────────────────────────── */
 router.patch('/:alertId/resolve', authenticate, async (req: AuthRequest, res) => {
     const id = String(req.params['alertId']);
-    if (isFirebase()) {
-        const { db, firestore } = await import('../services/firebase');
-        await db.ref(`alerts/${id}`).update({ status: 'resolved' });
-        await firestore.collection('alerts').doc(id).update({ status: 'resolved' });
-    } else {
-        localStore.update('alerts', id, { status: 'resolved' });
-    }
+    localStore.update('alerts', id, { status: 'resolved' });
     broadcast('ALERT_RESOLVED', { alertId: id });
     res.json({ success: true });
 });

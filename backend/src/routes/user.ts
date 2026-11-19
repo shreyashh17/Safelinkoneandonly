@@ -3,24 +3,10 @@ import { authenticate, AuthRequest } from '../middleware/auth';
 import localStore from '../services/localStore';
 
 const router = Router();
-const isFirebase = () => {
-    const p = process.env.FIREBASE_PROJECT_ID;
-    return !!p && p !== 'your_firebase_project_id';
-};
 
 // Get current user's own SOS alerts
 router.get('/alerts', authenticate, async (req: AuthRequest, res) => {
     const uid = req.user!.uid;
-    if (isFirebase()) {
-        const { firestore } = await import('../services/firebase');
-        const snap = await firestore.collection('alerts')
-            .where('uid', '==', uid)
-            .orderBy('timestamp', 'desc')
-            .limit(20)
-            .get();
-        res.json(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })));
-        return;
-    }
     const all = localStore.where<any>('alerts', 'uid', uid);
     all.sort((a, b) => b.timestamp > a.timestamp ? 1 : -1);
     res.json(all.slice(0, 20));
@@ -29,16 +15,6 @@ router.get('/alerts', authenticate, async (req: AuthRequest, res) => {
 // Get current user's own complaints
 router.get('/complaints', authenticate, async (req: AuthRequest, res) => {
     const uid = req.user!.uid;
-    if (isFirebase()) {
-        const { firestore } = await import('../services/firebase');
-        const snap = await firestore.collection('complaints')
-            .where('uid', '==', uid)
-            .orderBy('createdAt', 'desc')
-            .limit(20)
-            .get();
-        res.json(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })));
-        return;
-    }
     const all = localStore.where<any>('complaints', 'uid', uid);
     all.sort((a, b) => b.createdAt > a.createdAt ? 1 : -1);
     res.json(all.slice(0, 20));
@@ -47,14 +23,6 @@ router.get('/complaints', authenticate, async (req: AuthRequest, res) => {
 // Get user profile
 router.get('/me', authenticate, async (req: AuthRequest, res) => {
     const uid = req.user!.uid;
-    if (isFirebase()) {
-        const { firestore } = await import('../services/firebase');
-        const doc = await firestore.collection('users').doc(uid).get();
-        if (!doc.exists) { res.status(404).json({ error: 'User not found' }); return; }
-        const { passwordHash, ...safe } = doc.data() as any;
-        res.json(safe);
-        return;
-    }
     const user = localStore.get<any>('users', uid);
     if (!user) { res.status(404).json({ error: 'User not found' }); return; }
     const { passwordHash, ...safe } = user;

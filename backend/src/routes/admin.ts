@@ -3,10 +3,6 @@ import { authenticate, requireAdmin } from '../middleware/auth';
 import localStore from '../services/localStore';
 
 const router = Router();
-const isFirebase = () => {
-    const p = process.env.FIREBASE_PROJECT_ID;
-    return !!p && p !== 'your_firebase_project_id';
-};
 
 function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const R = 6371000;
@@ -18,51 +14,20 @@ function getDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: numbe
 }
 
 router.get('/alerts', authenticate, requireAdmin, async (_req, res) => {
-    if (isFirebase()) {
-        const { firestore } = await import('../services/firebase');
-        const snap = await firestore.collection('alerts').orderBy('timestamp', 'desc').limit(100).get();
-        res.json(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })));
-        return;
-    }
     res.json(localStore.getAll('alerts', 'timestamp'));
 });
 
 router.get('/locations', authenticate, requireAdmin, async (_req, res) => {
-    if (isFirebase()) {
-        const { db } = await import('../services/firebase');
-        const snap = await db.ref('locations').once('value');
-        res.json(Object.values(snap.val() || {}));
-        return;
-    }
     res.json(localStore.getAll('locations'));
 });
 
 router.get('/complaints', authenticate, requireAdmin, async (_req, res) => {
-    if (isFirebase()) {
-        const { firestore } = await import('../services/firebase');
-        const snap = await firestore.collection('complaints').orderBy('createdAt', 'desc').limit(200).get();
-        res.json(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })));
-        return;
-    }
     res.json(localStore.getAll('complaints', 'createdAt'));
 });
 
 router.get('/crowd-density', authenticate, requireAdmin, async (_req, res) => {
-    const locations = isFirebase()
-        ? await (async () => {
-            const { db } = await import('../services/firebase');
-            const snap = await db.ref('locations').once('value');
-            return Object.values(snap.val() || {}) as any[];
-        })()
-        : localStore.getAll('locations');
-
-    const zones = isFirebase()
-        ? await (async () => {
-            const { firestore } = await import('../services/firebase');
-            const snap = await firestore.collection('geofenceZones').where('active', '==', true).get();
-            return snap.docs.map((d: any) => ({ id: d.id, ...d.data() })) as any[];
-        })()
-        : localStore.getAll<any>('geofenceZones').filter((z) => z.active);
+    const locations = localStore.getAll('locations');
+    const zones = localStore.getAll<any>('geofenceZones').filter((z) => z.active);
 
     const density = zones.map((zone: any) => {
         const count = (locations as any[]).filter((loc: any) => {
@@ -76,15 +41,6 @@ router.get('/crowd-density', authenticate, requireAdmin, async (_req, res) => {
 
 // ── Users list (admin) ────────────────────────────────────────────────────────
 router.get('/users', authenticate, requireAdmin, async (_req, res) => {
-    if (isFirebase()) {
-        const { firestore } = await import('../services/firebase');
-        const snap = await firestore.collection('users').orderBy('createdAt', 'desc').limit(200).get();
-        res.json(snap.docs.map((d: any) => {
-            const { passwordHash, ...safe } = d.data() as any;
-            return { id: d.id, ...safe };
-        }));
-        return;
-    }
     const users = localStore.getAll<any>('users');
     res.json(users.map(u => {
         const { passwordHash, ...safe } = u;

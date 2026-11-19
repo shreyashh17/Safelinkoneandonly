@@ -8,10 +8,6 @@ import { broadcast } from '../services/websocket';
 
 const upload = multer({ dest: 'uploads/' });
 const router = Router();
-const isFirebase = () => {
-    const p = process.env.FIREBASE_PROJECT_ID;
-    return !!p && p !== 'your_firebase_project_id';
-};
 
 router.post('/submit', authenticate, async (req: AuthRequest, res) => {
     const { text, latitude, longitude, category = 'general' } = req.body;
@@ -22,15 +18,8 @@ router.post('/submit', authenticate, async (req: AuthRequest, res) => {
         status: 'open', createdAt: new Date().toISOString(), distress,
     };
 
-    let id: string;
-    if (isFirebase()) {
-        const { firestore } = await import('../services/firebase');
-        const ref = await firestore.collection('complaints').add(complaint);
-        id = ref.id;
-    } else {
-        id = localStore.newId();
-        localStore.set('complaints', id, { ...complaint, id });
-    }
+    const id = localStore.newId();
+    localStore.set('complaints', id, { ...complaint, id });
 
     broadcast('NEW_COMPLAINT', { id, ...complaint });
     res.status(201).json({ id, complaint, distress });
@@ -60,12 +49,6 @@ router.post('/transcribe', authenticate, upload.single('audio'), async (req: Aut
 });
 
 router.get('/', authenticate, async (_req, res) => {
-    if (isFirebase()) {
-        const { firestore } = await import('../services/firebase');
-        const snap = await firestore.collection('complaints').orderBy('createdAt', 'desc').limit(50).get();
-        res.json(snap.docs.map((d: any) => ({ id: d.id, ...d.data() })));
-        return;
-    }
     res.json(localStore.getAll('complaints', 'createdAt'));
 });
 

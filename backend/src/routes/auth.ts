@@ -6,49 +6,15 @@ import localStore from '../services/localStore';
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'safelink_dev_secret';
 
-// Helper to check if Firebase is properly configured
-function isFirebaseConfigured(): boolean {
-    const p = process.env.FIREBASE_PROJECT_ID;
-    return !!p && p !== 'your_firebase_project_id';
-}
-
-async function findUserByEmail(email: string): Promise<any | null> {
+function findUserByEmail(email: string): any | null {
     const clean = (email || '').trim().toLowerCase();
     if (!clean) return null;
-
-    if (isFirebaseConfigured()) {
-        try {
-            const { firestore } = await import('../services/firebase');
-            if (firestore) {
-                const snap = await firestore.collection('users').get();
-                for (const doc of snap.docs) {
-                    const d = doc.data();
-                    if (d.email?.trim().toLowerCase() === clean) {
-                        return { uid: doc.id, ...d };
-                    }
-                }
-            }
-        } catch (err: any) {
-            console.warn('⚠️ Firestore read warning, using localStore fallback:', err.message);
-        }
-    }
-
     const allUsers = localStore.getAll<any>('users');
     return allUsers.find(u => u.email?.trim().toLowerCase() === clean) ?? null;
 }
 
-async function saveUser(uid: string, data: object): Promise<void> {
+function saveUser(uid: string, data: object): void {
     localStore.set('users', uid, data);
-    if (isFirebaseConfigured()) {
-        try {
-            const { firestore } = await import('../services/firebase');
-            if (firestore) {
-                await firestore.collection('users').doc(uid).set(data, { merge: true });
-            }
-        } catch (err: any) {
-            console.warn('⚠️ Firestore sync warning:', err.message);
-        }
-    }
 }
 
 // ── Register (Citizen or Admin) ──────────────────────────────────────────────
