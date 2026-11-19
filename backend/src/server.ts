@@ -6,12 +6,12 @@ import { WebSocketServer } from 'ws';
 import app from './app';
 import { setupWebSocket } from './services/websocket';
 
-const PORT = process.env.PORT || 5000;
+const PORT = Number(process.env.PORT) || 5000;
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 setupWebSocket(wss);
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 SafeLink backend running on port ${PORT}`);
 });
